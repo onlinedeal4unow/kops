@@ -1,4 +1,4 @@
-# Bastion in Kops
+# Bastion in kOps
 
 Bastion provide an external facing point of entry into a network containing private network instances. This host can provide a single point of fortification or audit and can be started and stopped to enable or disable inbound SSH communication from the Internet, some call bastion as the "jump server".
 
@@ -17,7 +17,7 @@ kops create cluster --topology private --networking $provider --bastion $NAME
 
 To add a bastion instance group to a pre-existing cluster, create a new instance group with the `--role Bastion` flag and one or more subnets (e.g. `utility-us-east-2a,utility-us-east-2b`). 
 ```yaml
-kops create instancegroup --role Bastion --subnet $SUBNET
+kops create instancegroup bastions --role Bastion --subnet $SUBNET
 ```
 
 ### Configure the bastion instance group
@@ -31,10 +31,9 @@ kops edit ig bastions --name $KOPS_NAME
 You should now be able to edit and configure your bastion instance group.
 
 ```yaml
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: "2017-01-05T13:37:07Z"
   name: bastions
 spec:
   associatePublicIp: true
@@ -62,7 +61,7 @@ The default bastion name is `bastion.$NAME` as in
 bastion.mycluster.example.com
 ```
 
-Unless a user is using `--dns-zone` which will inherently use the `basion-$ZONE` syntax.
+Unless a user is using `--dns-zone` which will inherently use the `bastion-$ZONE` syntax.
 
 You can define a custom bastion CNAME by editing the main cluster config `kops edit cluster $NAME` and modifying the following block
 
@@ -71,6 +70,47 @@ spec:
   topology:
     bastion:
       bastionPublicName: bastion.mycluster.example.com
+```
+
+### Using an internal (VPC only) load balancer 
+{{ kops_feature_table(kops_added_default='1.22') }}
+
+When configuring a LoadBalancer, you can also choose to have a public load balancer or an internal (VPC only) load balancer. The `type` field should be `Public` or `Internal` (defaults to `Public` if omitted).
+
+```yaml
+spec:
+  topology:
+    bastion:
+      loadBalancer:
+        type: "Internal"
+```
+
+### Additional security groups to ELB
+{{ kops_feature_table(kops_added_default='1.18') }}
+
+If you want to add security groups to the bastion ELB
+
+```yaml
+spec:
+  topology:
+    bastion:
+      bastionPublicName: bastion.mycluster.example.com
+      loadBalancer:
+        additionalSecurityGroups:
+        - "sg-***"
+```
+
+### Access when using gossip
+
+When using [gossip mode](gossip.md), there is no DNS zone where we can configure a
+CNAME for the bastion. Because bastions are fronted with a load
+balancer, you can instead use the endpoint of the load balancer to
+reach your bastion.
+
+On AWS, an easy way to find this DNS name is with kops toolbox:
+
+```
+kops toolbox dump -ojson | grep 'bastion.*elb.amazonaws.com'
 ```
 
 ### Using SSH agent to access your bastion
@@ -99,7 +139,7 @@ ssh admin@<master_ip>
 
 ### Changing your ELB idle timeout
 
-The bastion is accessed via an AWS ELB. The ELB is required to gain secure access into the private network and connect the user to the ASG that the bastion lives in. Kops will by default set the bastion ELB idle timeout to 5 minutes. This is important for SSH connections to the bastion that you plan to keep open.
+The bastion is accessed via an AWS ELB. The ELB is required to gain secure access into the private network and connect the user to the ASG that the bastion lives in. kOps will by default set the bastion ELB idle timeout to 5 minutes. This is important for SSH connections to the bastion that you plan to keep open.
 
 You can increase the ELB idle timeout by editing the main cluster config `kops edit cluster $NAME` and modifying the following block
 

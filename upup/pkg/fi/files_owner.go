@@ -1,7 +1,8 @@
+//go:build !windows
 // +build !windows
 
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,9 +24,11 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
 
+// EnsureFileOwner will set the owner & group for a file.
+// Empty values for owner/group will leave the owner/group unchanged.
 func EnsureFileOwner(destPath string, owner string, groupName string) (bool, error) {
 	changed := false
 	stat, err := os.Lstat(destPath)
@@ -33,22 +36,38 @@ func EnsureFileOwner(destPath string, owner string, groupName string) (bool, err
 		return changed, fmt.Errorf("error getting file stat for %q: %v", destPath, err)
 	}
 
-	user, err := LookupUser(owner) //user.Lookup(owner)
-	if err != nil {
-		return changed, fmt.Errorf("error looking up user %q: %v", owner, err)
+	actualUserID := int(stat.Sys().(*syscall.Stat_t).Uid)
+	userID := actualUserID
+	if owner != "" {
+		user, err := LookupUser(owner) // user.Lookup(owner)
+		if err != nil {
+			return changed, fmt.Errorf("error looking up user %q: %v", owner, err)
+		}
+		if user == nil {
+			return changed, fmt.Errorf("user %q not found", owner)
+		}
+		userID = user.Uid
 	}
 
-	group, err := LookupGroup(groupName)
-	if err != nil {
-		return changed, fmt.Errorf("error looking up group %q: %v", groupName, err)
+	actualGroupID := int(stat.Sys().(*syscall.Stat_t).Gid)
+	groupID := actualGroupID
+	if groupName != "" {
+		group, err := LookupGroup(groupName)
+		if err != nil {
+			return changed, fmt.Errorf("error looking up group %q: %v", groupName, err)
+		}
+		if group == nil {
+			return changed, fmt.Errorf("group %q not found", groupName)
+		}
+		groupID = group.Gid
 	}
 
-	if int(stat.Sys().(*syscall.Stat_t).Uid) == user.Uid && int(stat.Sys().(*syscall.Stat_t).Gid) == group.Gid {
+	if actualUserID == userID && actualGroupID == groupID {
 		return changed, nil
 	}
 
-	glog.Infof("Changing file owner/group for %q to %s:%s", destPath, owner, group)
-	err = os.Lchown(destPath, user.Uid, group.Gid)
+	klog.Infof("Changing file owner/group for %q to %s:%s", destPath, owner, groupName)
+	err = os.Lchown(destPath, userID, groupID)
 	if err != nil {
 		return changed, fmt.Errorf("error setting file owner/group for %q: %v", destPath, err)
 	}

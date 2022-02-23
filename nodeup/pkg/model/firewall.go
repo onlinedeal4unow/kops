@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ limitations under the License.
 package model
 
 import (
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
@@ -46,11 +46,11 @@ func (b *FirewallBuilder) buildSystemdService() *nodetasks.Service {
 	manifest.Set("Unit", "Before", "network.target")
 	manifest.Set("Service", "Type", "oneshot")
 	manifest.Set("Service", "RemainAfterExit", "yes")
-	manifest.Set("Service", "ExecStart", "/home/kubernetes/bin/iptables-setup")
+	manifest.Set("Service", "ExecStart", "/opt/kops/bin/iptables-setup")
 	manifest.Set("Install", "WantedBy", "basic.target")
 
 	manifestString := manifest.Render()
-	glog.V(8).Infof("Built service manifest %q\n%s", "kubernetes-iptables-setup", manifestString)
+	klog.V(8).Infof("Built service manifest %q\n%s", "kubernetes-iptables-setup", manifestString)
 
 	service := &nodetasks.Service{
 		Name:       "kubernetes-iptables-setup.service",
@@ -73,24 +73,23 @@ func (b *FirewallBuilder) buildFirewallScript() *nodetasks.File {
 
 # The GCI image has host firewall which drop most inbound/forwarded packets.
 # We need to add rules to accept all TCP/UDP/ICMP packets.
-if iptables -L INPUT | grep "Chain INPUT (policy DROP)" > /dev/null; then
+if iptables -w -L INPUT | grep "Chain INPUT (policy DROP)" > /dev/null; then
 echo "Add rules to accept all inbound TCP/UDP/ICMP packets"
 iptables -A INPUT -w -p TCP -j ACCEPT
 iptables -A INPUT -w -p UDP -j ACCEPT
 iptables -A INPUT -w -p ICMP -j ACCEPT
 fi
-if iptables -L FORWARD | grep "Chain FORWARD (policy DROP)" > /dev/null; then
+if iptables -w -L FORWARD | grep "Chain FORWARD (policy DROP)" > /dev/null; then
 echo "Add rules to accept all forwarded TCP/UDP/ICMP packets"
 iptables -A FORWARD -w -p TCP -j ACCEPT
 iptables -A FORWARD -w -p UDP -j ACCEPT
 iptables -A FORWARD -w -p ICMP -j ACCEPT
 fi
 `
-	t := &nodetasks.File{
-		Path:     "/home/kubernetes/bin/iptables-setup",
+	return &nodetasks.File{
+		Path:     "/opt/kops/bin/iptables-setup",
 		Contents: fi.NewStringResource(script),
 		Type:     nodetasks.FileType_File,
 		Mode:     s("0755"),
 	}
-	return t
 }

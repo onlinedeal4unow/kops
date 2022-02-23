@@ -1,79 +1,51 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "go_default_library",
     srcs = [
+        "allocator.go",
         "attrs.go",
+        "attrs_stubs.go",
+        "attrs_unix.go",
         "client.go",
         "conn.go",
+        "ls_formatting.go",
+        "ls_plan9.go",
+        "ls_stub.go",
+        "ls_unix.go",
+        "match.go",
         "packet.go",
+        "packet-manager.go",
+        "packet-typing.go",
+        "pool.go",
         "release.go",
+        "request.go",
+        "request-attrs.go",
+        "request-errors.go",
+        "request-example.go",
+        "request-interfaces.go",
+        "request-plan9.go",
+        "request-server.go",
+        "request-unix.go",
+        "request_windows.go",
         "server.go",
+        "server_statvfs_darwin.go",
+        "server_statvfs_impl.go",
+        "server_statvfs_linux.go",
+        "server_statvfs_plan9.go",
+        "server_statvfs_stubs.go",
         "sftp.go",
-    ] + select({
-        "@io_bazel_rules_go//go/platform:darwin_amd64": [
-            "attrs_unix.go",
-            "server_statvfs_darwin.go",
-            "server_statvfs_impl.go",
-            "server_unix.go",
-        ],
-        "@io_bazel_rules_go//go/platform:linux_amd64": [
-            "attrs_unix.go",
-            "server_statvfs_impl.go",
-            "server_statvfs_linux.go",
-            "server_unix.go",
-        ],
-        "@io_bazel_rules_go//go/platform:windows_amd64": [
-            "attrs_stubs.go",
-            "server_statvfs_stubs.go",
-            "server_stubs.go",
-        ],
-        "//conditions:default": [],
-    }),
+        "stat_plan9.go",
+        "stat_posix.go",
+        "syscall_fixed.go",
+        "syscall_good.go",
+    ],
+    importmap = "k8s.io/kops/vendor/github.com/pkg/sftp",
     importpath = "github.com/pkg/sftp",
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/kr/fs:go_default_library",
-        "//vendor/github.com/pkg/errors:go_default_library",
-        "//vendor/golang.org/x/crypto/ssh:go_default_library",
-    ],
-)
-
-go_test(
-    name = "go_default_test",
-    srcs = [
-        "attrs_test.go",
-        "client_integration_test.go",
-        "client_test.go",
-        "packet_test.go",
-        "server_integration_test.go",
-        "server_test.go",
-    ] + select({
-        "@io_bazel_rules_go//go/platform:darwin_amd64": [
-            "client_integration_darwin_test.go",
-        ],
-        "@io_bazel_rules_go//go/platform:linux_amd64": [
-            "client_integration_linux_test.go",
-        ],
-        "@io_bazel_rules_go//go/platform:windows_amd64": [
-            "other_test.go",
-        ],
-        "//conditions:default": [],
-    }),
-    importpath = "github.com/pkg/sftp",
-    library = ":go_default_library",
-    deps = [
-        "//vendor/github.com/kr/fs:go_default_library",
-        "//vendor/golang.org/x/crypto/ssh:go_default_library",
-    ],
-)
-
-go_test(
-    name = "go_default_xtest",
-    srcs = ["example_test.go"],
-    importpath = "github.com/pkg/sftp_test",
-    deps = [
-        ":go_default_library",
+        "//vendor/github.com/pkg/sftp/internal/encoding/ssh/filexfer:go_default_library",
         "//vendor/golang.org/x/crypto/ssh:go_default_library",
     ],
 )

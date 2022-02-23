@@ -19,9 +19,9 @@ package provider
 import (
 	"fmt"
 
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider/rrstype"
 	"k8s.io/kops/protokube/pkg/gossip/dns"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider/rrstype"
 )
 
 type zone struct {
@@ -185,7 +185,7 @@ func (r *resourceRecordSets) New(name string, rrdatas []string, ttl int64, rrsty
 	data := dns.DNSRecord{
 		Name:    name,
 		Rrdatas: rrdatas,
-		//Ttl:     int(ttl),
+		// Ttl:     int(ttl),
 		RrsType: string(rrstype),
 	}
 	return &resourceRecordSet{data: data}

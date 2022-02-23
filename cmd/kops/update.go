@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,34 +21,19 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/kops/cmd/kops/util"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubectl/pkg/util/i18n"
 )
 
-var (
-	update_long = templates.LongDesc(i18n.T(`
-	Creates or updates cloud resources to match cluster desired configuration.
-	`))
-
-	update_example = templates.Examples(i18n.T(`
-		# After cluster has been created, configure it with:
-		kops update cluster k8s.cluster.site --yes --state=s3://kops-state-1234
-	`))
-
-	update_short = i18n.T("Update a cluster.")
-)
+var updateShort = i18n.T("Update a cluster.")
 
 func NewCmdUpdate(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "update",
-		Short:   update_short,
-		Long:    update_long,
-		Example: update_example,
+		Use:   "update",
+		Short: updateShort,
 	}
 
 	//  subcommands
 	cmd.AddCommand(NewCmdUpdateCluster(f, out))
-	cmd.AddCommand(NewCmdUpdateFederation(f, out))
 
 	return cmd
 }

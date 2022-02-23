@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,47 +17,11 @@ limitations under the License.
 package cloudup
 
 import (
-	"net"
 	"reflect"
 	"testing"
 
 	"k8s.io/kops/pkg/apis/kops"
 )
-
-func Test_Split_Subnet(t *testing.T) {
-	tests := []struct {
-		parent   string
-		expected []string
-	}{
-		{
-			parent:   "1.2.3.0/24",
-			expected: []string{"1.2.3.0/27", "1.2.3.32/27", "1.2.3.64/27", "1.2.3.96/27", "1.2.3.128/27", "1.2.3.160/27", "1.2.3.192/27", "1.2.3.224/27"},
-		},
-		{
-			parent:   "1.2.3.0/27",
-			expected: []string{"1.2.3.0/30", "1.2.3.4/30", "1.2.3.8/30", "1.2.3.12/30", "1.2.3.16/30", "1.2.3.20/30", "1.2.3.24/30", "1.2.3.28/30"},
-		},
-	}
-	for _, test := range tests {
-		_, parent, err := net.ParseCIDR(test.parent)
-		if err != nil {
-			t.Fatalf("error parsing parent cidr %q: %v", test.parent, err)
-		}
-
-		subnets, err := splitInto8Subnets(parent)
-		if err != nil {
-			t.Fatalf("error splitting parent cidr %q: %v", parent, err)
-		}
-
-		var actual []string
-		for _, subnet := range subnets {
-			actual = append(actual, subnet.String())
-		}
-		if !reflect.DeepEqual(actual, test.expected) {
-			t.Fatalf("unexpected result of split: actual=%v, expected=%v", actual, test.expected)
-		}
-	}
-}
 
 func Test_AssignSubnets(t *testing.T) {
 	tests := []struct {
@@ -114,6 +78,37 @@ func Test_AssignSubnets(t *testing.T) {
 		},
 		{
 			subnets: []kops.ClusterSubnetSpec{
+				{Name: "a", Zone: "a", CIDR: "", IPv6CIDR: "/64#0", Type: kops.SubnetTypePublic},
+				{Name: "a", Zone: "a", CIDR: "", IPv6CIDR: "/64#1", Type: kops.SubnetTypeUtility},
+			},
+			expected: []string{"10.32.0.0/11", "10.0.0.0/14"},
+		},
+		{
+			subnets: []kops.ClusterSubnetSpec{
+				{Name: "a", Zone: "a", CIDR: "10.1.0.0/16", Type: kops.SubnetTypePrivate},
+			},
+			expected: []string{"10.1.0.0/16"},
+		},
+		{
+			subnets: []kops.ClusterSubnetSpec{
+				{Name: "a", Zone: "a", CIDR: "", Type: kops.SubnetTypePrivate},
+			},
+			expected: []string{"10.32.0.0/11"},
+		},
+		{
+			subnets: []kops.ClusterSubnetSpec{
+				{Name: "a", Zone: "a", CIDR: "", IPv6CIDR: "/64#0", Type: kops.SubnetTypePrivate},
+			},
+			expected: []string{""},
+		},
+		{
+			subnets: []kops.ClusterSubnetSpec{
+				{Name: "a", Zone: "a", CIDR: "", IPv6CIDR: "/64#0", Type: kops.SubnetTypeDualStack},
+			},
+			expected: []string{"10.32.0.0/11"},
+		},
+		{
+			subnets: []kops.ClusterSubnetSpec{
 				{Name: "a", Zone: "a", CIDR: "", Type: kops.SubnetTypePublic},
 				{Name: "a", Zone: "a", CIDR: "", Type: kops.SubnetTypeUtility},
 				{Name: "b", Zone: "b", CIDR: "", Type: kops.SubnetTypePublic},
@@ -135,7 +130,7 @@ func Test_AssignSubnets(t *testing.T) {
 		c.Spec.NetworkCIDR = "10.0.0.0/8"
 		c.Spec.Subnets = test.subnets
 
-		err := assignCIDRsToSubnets(c)
+		err := assignCIDRsToSubnets(c, nil)
 		if err != nil {
 			t.Fatalf("unexpected error on test %d: %v", i+1, err)
 		}

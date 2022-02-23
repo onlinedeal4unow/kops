@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -38,9 +38,9 @@ var (
 //var ParameterCodec = runtime.NewParameterCodec(Scheme)
 
 // GroupName is the group name use in this package
-const GroupName = "kops"
+const GroupName = "kops.k8s.io"
 
-// SchemeGroupVersion is group version used to register these objects
+// SchemeGroupVersion is the group version used to register these objects
 var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}
 
 //// Kind takes an unqualified kind and returns a Group qualified GroupKind
@@ -59,29 +59,27 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ClusterList{},
 		&InstanceGroup{},
 		&InstanceGroupList{},
-		&Federation{},
-		&FederationList{},
 		&Keyset{},
 		&KeysetList{},
 		&SSHCredential{},
 		&SSHCredentialList{},
 	)
-	//metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	// metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }
 
 func (obj *Cluster) GetObjectKind() schema.ObjectKind {
 	return &obj.TypeMeta
 }
+
 func (obj *InstanceGroup) GetObjectKind() schema.ObjectKind {
 	return &obj.TypeMeta
 }
-func (obj *Federation) GetObjectKind() schema.ObjectKind {
-	return &obj.TypeMeta
-}
+
 func (obj *Keyset) GetObjectKind() schema.ObjectKind {
 	return &obj.TypeMeta
 }
+
 func (obj *SSHCredential) GetObjectKind() schema.ObjectKind {
 	return &obj.TypeMeta
 }

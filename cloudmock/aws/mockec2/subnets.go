@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,9 +20,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
 
 type subnetInfo struct {
@@ -30,6 +31,9 @@ type subnetInfo struct {
 }
 
 func (m *MockEC2) FindSubnet(id string) *ec2.Subnet {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	subnet := m.subnets[id]
 	if subnet == nil {
 		return nil
@@ -41,6 +45,9 @@ func (m *MockEC2) FindSubnet(id string) *ec2.Subnet {
 }
 
 func (m *MockEC2) SubnetIds() []string {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	var ids []string
 	for id := range m.subnets {
 		ids = append(ids, id)
@@ -50,19 +57,38 @@ func (m *MockEC2) SubnetIds() []string {
 
 func (m *MockEC2) CreateSubnetRequest(*ec2.CreateSubnetInput) (*request.Request, *ec2.CreateSubnetOutput) {
 	panic("Not implemented")
-	return nil, nil
 }
 
-func (m *MockEC2) CreateSubnet(request *ec2.CreateSubnetInput) (*ec2.CreateSubnetOutput, error) {
-	glog.Infof("CreateSubnet: %v", request)
+func (m *MockEC2) CreateSubnetWithContext(aws.Context, *ec2.CreateSubnetInput, ...request.Option) (*ec2.CreateSubnetOutput, error) {
+	panic("Not implemented")
+}
 
-	m.subnetNumber++
-	n := m.subnetNumber
+func (m *MockEC2) CreateSubnetWithId(request *ec2.CreateSubnetInput, id string) (*ec2.CreateSubnetOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	subnet := &ec2.Subnet{
-		SubnetId:  s(fmt.Sprintf("subnet-%d", n)),
-		VpcId:     request.VpcId,
-		CidrBlock: request.CidrBlock,
+		SubnetId:         s(id),
+		VpcId:            request.VpcId,
+		CidrBlock:        request.CidrBlock,
+		AvailabilityZone: request.AvailabilityZone,
+		PrivateDnsNameOptionsOnLaunch: &ec2.PrivateDnsNameOptionsOnLaunch{
+			EnableResourceNameDnsAAAARecord: aws.Bool(false),
+			EnableResourceNameDnsARecord:    aws.Bool(false),
+			HostnameType:                    aws.String(ec2.HostnameTypeIpName),
+		},
+	}
+
+	if request.Ipv6CidrBlock != nil {
+		subnet.Ipv6CidrBlockAssociationSet = []*ec2.SubnetIpv6CidrBlockAssociation{
+			{
+				AssociationId: aws.String("subnet-cidr-assoc-ipv6-" + id),
+				Ipv6CidrBlock: request.Ipv6CidrBlock,
+				Ipv6CidrBlockState: &ec2.SubnetCidrBlockState{
+					State: aws.String(ec2.SubnetCidrBlockStateCodeAssociated),
+				},
+			},
+		}
 	}
 
 	if m.subnets == nil {
@@ -72,19 +98,38 @@ func (m *MockEC2) CreateSubnet(request *ec2.CreateSubnetInput) (*ec2.CreateSubne
 		main: *subnet,
 	}
 
+	m.addTags(id, tagSpecificationsToTags(request.TagSpecifications, ec2.ResourceTypeSubnet)...)
+
 	response := &ec2.CreateSubnetOutput{
 		Subnet: subnet,
 	}
 	return response, nil
 }
 
+func (m *MockEC2) CreateSubnet(request *ec2.CreateSubnetInput) (*ec2.CreateSubnetOutput, error) {
+	klog.Infof("CreateSubnet: %v", request)
+
+	id := m.allocateId("subnet")
+	return m.CreateSubnetWithId(request, id)
+}
+
 func (m *MockEC2) DescribeSubnetsRequest(*ec2.DescribeSubnetsInput) (*request.Request, *ec2.DescribeSubnetsOutput) {
 	panic("Not implemented")
-	return nil, nil
+}
+
+func (m *MockEC2) DescribeSubnetsWithContext(aws.Context, *ec2.DescribeSubnetsInput, ...request.Option) (*ec2.DescribeSubnetsOutput, error) {
+	panic("Not implemented")
 }
 
 func (m *MockEC2) DescribeSubnets(request *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
-	glog.Infof("DescribeSubnets: %v", request)
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("DescribeSubnets: %v", request)
+
+	if len(request.SubnetIds) != 0 {
+		request.Filters = append(request.Filters, &ec2.Filter{Name: s("subnet-id"), Values: request.SubnetIds})
+	}
 
 	var subnets []*ec2.Subnet
 
@@ -93,7 +138,16 @@ func (m *MockEC2) DescribeSubnets(request *ec2.DescribeSubnetsInput) (*ec2.Descr
 		for _, filter := range request.Filters {
 			match := false
 			switch *filter.Name {
-
+			case "vpc-id":
+				if *subnet.main.VpcId == *filter.Values[0] {
+					match = true
+				}
+			case "subnet-id":
+				for _, v := range filter.Values {
+					if *subnet.main.SubnetId == *v {
+						match = true
+					}
+				}
 			default:
 				if strings.HasPrefix(*filter.Name, "tag:") {
 					match = m.hasTag(ec2.ResourceTypeSubnet, *subnet.main.SubnetId, filter)
@@ -122,4 +176,95 @@ func (m *MockEC2) DescribeSubnets(request *ec2.DescribeSubnetsInput) (*ec2.Descr
 	}
 
 	return response, nil
+}
+
+func (m *MockEC2) AssociateRouteTable(request *ec2.AssociateRouteTableInput) (*ec2.AssociateRouteTableOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("AuthorizeSecurityGroupIngress: %v", request)
+
+	if aws.StringValue(request.SubnetId) == "" {
+		return nil, fmt.Errorf("SubnetId not specified")
+	}
+	if aws.StringValue(request.RouteTableId) == "" {
+		return nil, fmt.Errorf("RouteTableId not specified")
+	}
+
+	if request.DryRun != nil {
+		klog.Fatalf("DryRun")
+	}
+
+	subnet := m.subnets[*request.SubnetId]
+	if subnet == nil {
+		return nil, fmt.Errorf("Subnet not found")
+	}
+	rt := m.RouteTables[*request.RouteTableId]
+	if rt == nil {
+		return nil, fmt.Errorf("RouteTable not found")
+	}
+
+	associationID := m.allocateId("rta")
+
+	rt.Associations = append(rt.Associations, &ec2.RouteTableAssociation{
+		RouteTableId:            rt.RouteTableId,
+		SubnetId:                subnet.main.SubnetId,
+		RouteTableAssociationId: &associationID,
+	})
+	// TODO: More fields
+	// // Indicates whether this is the main route table.
+	// Main *bool `locationName:"main" type:"boolean"`
+
+	// TODO: We need to fold permissions
+
+	response := &ec2.AssociateRouteTableOutput{
+		AssociationId: &associationID,
+	}
+	return response, nil
+}
+
+func (m *MockEC2) AssociateRouteTableWithContext(aws.Context, *ec2.AssociateRouteTableInput, ...request.Option) (*ec2.AssociateRouteTableOutput, error) {
+	panic("Not implemented")
+}
+
+func (m *MockEC2) AssociateRouteTableRequest(*ec2.AssociateRouteTableInput) (*request.Request, *ec2.AssociateRouteTableOutput) {
+	panic("Not implemented")
+}
+
+func (m *MockEC2) DeleteSubnet(request *ec2.DeleteSubnetInput) (*ec2.DeleteSubnetOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("DeleteSubnet: %v", request)
+
+	id := aws.StringValue(request.SubnetId)
+	o := m.subnets[id]
+	if o == nil {
+		return nil, fmt.Errorf("Subnet %q not found", id)
+	}
+	delete(m.subnets, id)
+
+	return &ec2.DeleteSubnetOutput{}, nil
+}
+
+func (m *MockEC2) DeleteSubnetWithContext(aws.Context, *ec2.DeleteSubnetInput, ...request.Option) (*ec2.DeleteSubnetOutput, error) {
+	panic("Not implemented")
+}
+
+func (m *MockEC2) DeleteSubnetRequest(*ec2.DeleteSubnetInput) (*request.Request, *ec2.DeleteSubnetOutput) {
+	panic("Not implemented")
+}
+
+func (m *MockEC2) ModifySubnetAttribute(request *ec2.ModifySubnetAttributeInput) (*ec2.ModifySubnetAttributeOutput, error) {
+	subnet := m.subnets[*request.SubnetId]
+	if request.EnableResourceNameDnsAAAARecordOnLaunch != nil {
+		subnet.main.PrivateDnsNameOptionsOnLaunch.EnableResourceNameDnsAAAARecord = request.EnableResourceNameDnsAAAARecordOnLaunch.Value
+	}
+	if request.EnableResourceNameDnsARecordOnLaunch != nil {
+		subnet.main.PrivateDnsNameOptionsOnLaunch.EnableResourceNameDnsARecord = request.EnableResourceNameDnsARecordOnLaunch.Value
+	}
+	if request.PrivateDnsHostnameTypeOnLaunch != nil {
+		subnet.main.PrivateDnsNameOptionsOnLaunch.HostnameType = request.PrivateDnsHostnameTypeOnLaunch
+	}
+	return &ec2.ModifySubnetAttributeOutput{}, nil
 }

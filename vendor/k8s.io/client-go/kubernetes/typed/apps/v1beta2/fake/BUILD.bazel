@@ -9,9 +9,9 @@ go_library(
         "fake_daemonset.go",
         "fake_deployment.go",
         "fake_replicaset.go",
-        "fake_scale.go",
         "fake_statefulset.go",
     ],
+    importmap = "k8s.io/kops/vendor/k8s.io/client-go/kubernetes/typed/apps/v1beta2/fake",
     importpath = "k8s.io/client-go/kubernetes/typed/apps/v1beta2/fake",
     visibility = ["//visibility:public"],
     deps = [
@@ -21,6 +21,7 @@ go_library(
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/types:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/watch:go_default_library",
+        "//vendor/k8s.io/client-go/applyconfigurations/apps/v1beta2:go_default_library",
         "//vendor/k8s.io/client-go/kubernetes/typed/apps/v1beta2:go_default_library",
         "//vendor/k8s.io/client-go/rest:go_default_library",
         "//vendor/k8s.io/client-go/testing:go_default_library",

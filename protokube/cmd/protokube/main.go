@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -26,18 +25,21 @@ import (
 	"path"
 	"strings"
 
+	"github.com/spf13/pflag"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/dns-controller/pkg/dns"
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
+	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/protokube/pkg/gossip"
 	gossipdns "k8s.io/kops/protokube/pkg/gossip/dns"
-	"k8s.io/kops/protokube/pkg/gossip/mesh"
+	_ "k8s.io/kops/protokube/pkg/gossip/memberlist"
+	_ "k8s.io/kops/protokube/pkg/gossip/mesh"
 	"k8s.io/kops/protokube/pkg/protokube"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
+
 	// Load DNS plugins
-	"github.com/golang/glog"
-	"github.com/spf13/pflag"
-	_ "k8s.io/kubernetes/federation/pkg/dnsprovider/providers/aws/route53"
-	k8scoredns "k8s.io/kubernetes/federation/pkg/dnsprovider/providers/coredns"
-	_ "k8s.io/kubernetes/federation/pkg/dnsprovider/providers/google/clouddns"
+	_ "k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/aws/route53"
+	_ "k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/do"
+	_ "k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns"
 )
 
 var (
@@ -47,10 +49,12 @@ var (
 )
 
 func main() {
+	klog.InitFlags(nil)
+
 	fmt.Printf("protokube version %s\n", BuildVersion)
 
 	if err := run(); err != nil {
-		glog.Errorf("Error: %v", err)
+		klog.Errorf("Error: %v", err)
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -59,33 +63,35 @@ func main() {
 // run is responsible for running the protokube service controller
 func run() error {
 	var zones []string
-	var applyTaints, initializeRBAC, containerized, master bool
-	var cloud, clusterID, dnsServer, dnsProviderID, dnsInternalSuffix, gossipSecret, gossipListen string
-	var flagChannels, tlsCert, tlsKey, tlsCA, peerCert, peerKey, peerCA string
-	var etcdImageSource, etcdElectionTimeout, etcdHeartbeatInterval string
+	var containerized, master bool
+	var cloud, clusterID, dnsProviderID, dnsInternalSuffix, gossipSecret, gossipListen, gossipProtocol, gossipSecretSecondary, gossipListenSecondary, gossipProtocolSecondary string
+	var flagChannels string
+	var dnsUpdateInterval int
 
-	flag.BoolVar(&applyTaints, "apply-taints", applyTaints, "Apply taints to nodes based on the role")
 	flag.BoolVar(&containerized, "containerized", containerized, "Set if we are running containerized.")
-	flag.BoolVar(&initializeRBAC, "initialize-rbac", initializeRBAC, "Set if we should initialize RBAC")
 	flag.BoolVar(&master, "master", master, "Whether or not this node is a master")
-	flag.StringVar(&cloud, "cloud", "aws", "CloudProvider we are using (aws,gce)")
+	flag.StringVar(&cloud, "cloud", "aws", "CloudProvider we are using (aws,digitalocean,gce,openstack)")
 	flag.StringVar(&clusterID, "cluster-id", clusterID, "Cluster ID")
 	flag.StringVar(&dnsInternalSuffix, "dns-internal-suffix", dnsInternalSuffix, "DNS suffix for internal domain names")
-	flag.StringVar(&dnsServer, "dns-server", dnsServer, "DNS Server")
+	flags.IntVar(&dnsUpdateInterval, "dns-update-interval", 5, "Configure interval at which to update DNS records.")
 	flag.StringVar(&flagChannels, "channels", flagChannels, "channels to install")
-	flag.StringVar(&gossipListen, "gossip-listen", "0.0.0.0:3999", "address:port on which to bind for gossip")
-	flag.StringVar(&peerCA, "peer-ca", peerCA, "Path to a file containing the peer ca in PEM format")
-	flag.StringVar(&peerCert, "peer-cert", peerCert, "Path to a file containing the peer certificate")
-	flag.StringVar(&peerKey, "peer-key", peerKey, "Path to a file containing the private key for the peers")
-	flag.StringVar(&tlsCA, "tls-ca", tlsCA, "Path to a file containing the ca for client certificates")
-	flag.StringVar(&tlsCert, "tls-cert", tlsCert, "Path to a file containing the certificate for etcd server")
-	flag.StringVar(&tlsKey, "tls-key", tlsKey, "Path to a file containing the private key for etcd server")
-	flags.StringSliceVarP(&zones, "zone", "z", []string{}, "Configure permitted zones and their mappings")
-	flags.StringVar(&dnsProviderID, "dns", "aws-route53", "DNS provider we should use (aws-route53, google-clouddns, coredns)")
-	flags.StringVar(&etcdImageSource, "etcd-image", "gcr.io/google_containers/etcd:2.2.1", "Etcd Source Container Registry")
-	flags.StringVar(&etcdElectionTimeout, "etcd-election-timeout", etcdElectionTimeout, "time in ms for an election to timeout")
-	flags.StringVar(&etcdHeartbeatInterval, "etcd-heartbeat-interval", etcdHeartbeatInterval, "time in ms of a heartbeat interval")
+	flag.StringVar(&gossipProtocol, "gossip-protocol", "mesh", "mesh/memberlist")
+	flag.StringVar(&gossipListen, "gossip-listen", fmt.Sprintf("0.0.0.0:%d", wellknownports.ProtokubeGossipWeaveMesh), "address:port on which to bind for gossip")
 	flags.StringVar(&gossipSecret, "gossip-secret", gossipSecret, "Secret to use to secure gossip")
+	flag.StringVar(&gossipProtocolSecondary, "gossip-protocol-secondary", "memberlist", "mesh/memberlist")
+	flag.StringVar(&gossipListenSecondary, "gossip-listen-secondary", fmt.Sprintf("0.0.0.0:%d", wellknownports.ProtokubeGossipMemberlist), "address:port on which to bind for gossip")
+	flags.StringVar(&gossipSecretSecondary, "gossip-secret-secondary", gossipSecret, "Secret to use to secure gossip")
+	flags.StringSliceVarP(&zones, "zone", "z", []string{}, "Configure permitted zones and their mappings")
+	flags.StringVar(&dnsProviderID, "dns", "aws-route53", "DNS provider we should use (aws-route53, google-clouddns, digitalocean)")
+
+	bootstrapMasterNodeLabels := false
+	flag.BoolVar(&bootstrapMasterNodeLabels, "bootstrap-master-node-labels", bootstrapMasterNodeLabels, "Bootstrap the labels for master nodes (required in k8s 1.16)")
+
+	nodeName := ""
+	flag.StringVar(&nodeName, "node-name", nodeName, "name of the node as will be created in kubernetes; used with bootstrap-master-node-labels")
+
+	var removeDNSNames string
+	flag.StringVar(&removeDNSNames, "remove-dns-names", removeDNSNames, "If set, will remove the DNS records specified")
 
 	// Trick to avoid 'logging before flag.Parse' warning
 	flag.CommandLine.Parse([]string{})
@@ -100,66 +106,94 @@ func run() error {
 	if cloud == "aws" {
 		awsVolumes, err := protokube.NewAWSVolumes()
 		if err != nil {
-			glog.Errorf("Error initializing AWS: %q", err)
+			klog.Errorf("Error initializing AWS: %q", err)
 			os.Exit(1)
 		}
 		volumes = awsVolumes
+		internalIP = awsVolumes.InternalIP()
 
 		if clusterID == "" {
 			clusterID = awsVolumes.ClusterID()
 		}
-		if internalIP == nil {
-			internalIP = awsVolumes.InternalIP()
+
+	} else if cloud == "digitalocean" {
+		doVolumes, err := protokube.NewDOVolumes()
+		if err != nil {
+			klog.Errorf("Error initializing DigitalOcean: %q", err)
+			os.Exit(1)
+		}
+		volumes = doVolumes
+		internalIP, err = protokube.GetDropletInternalIP()
+		if err != nil {
+			klog.Errorf("Error getting droplet internal IP: %s", err)
+			os.Exit(1)
+		}
+
+		if clusterID == "" {
+			clusterID, err = protokube.GetClusterID()
+			if err != nil {
+				klog.Errorf("Error getting clusterid: %s", err)
+				os.Exit(1)
+			}
 		}
 	} else if cloud == "gce" {
 		gceVolumes, err := protokube.NewGCEVolumes()
 		if err != nil {
-			glog.Errorf("Error initializing GCE: %q", err)
+			klog.Errorf("Error initializing GCE: %q", err)
 			os.Exit(1)
 		}
 
 		volumes = gceVolumes
+		internalIP = gceVolumes.InternalIP()
 
 		if clusterID == "" {
 			clusterID = gceVolumes.ClusterID()
 		}
-
-		if internalIP == nil {
-			internalIP = gceVolumes.InternalIP()
-		}
-	} else if cloud == "vsphere" {
-		glog.Info("Initializing vSphere volumes")
-		vsphereVolumes, err := protokube.NewVSphereVolumes()
+	} else if cloud == "openstack" {
+		klog.Info("Initializing openstack volumes")
+		osVolumes, err := protokube.NewOpenstackVolumes()
 		if err != nil {
-			glog.Errorf("Error initializing vSphere: %q", err)
+			klog.Errorf("Error initializing openstack: %q", err)
 			os.Exit(1)
 		}
-		volumes = vsphereVolumes
-		if internalIP == nil {
-			internalIP = vsphereVolumes.InternalIp()
-		}
+		volumes = osVolumes
+		internalIP = osVolumes.InternalIP()
 
+		if clusterID == "" {
+			clusterID = osVolumes.ClusterID()
+		}
+	} else if cloud == "azure" {
+		klog.Info("Initializing Azure volumes")
+		azureVolumes, err := protokube.NewAzureVolumes()
+		if err != nil {
+			klog.Errorf("Error initializing Azure: %q", err)
+			os.Exit(1)
+		}
+		volumes = azureVolumes
+		internalIP = azureVolumes.InternalIP()
+
+		if clusterID == "" {
+			clusterID = azureVolumes.ClusterID()
+		}
 	} else {
-		glog.Errorf("Unknown cloud %q", cloud)
+		klog.Errorf("Unknown cloud %q", cloud)
 		os.Exit(1)
 	}
 
 	if clusterID == "" {
-		if clusterID == "" {
-			return fmt.Errorf("cluster-id is required (cannot be determined from cloud)")
-		}
-		glog.Infof("Setting cluster-id from cloud: %s", clusterID)
+		return fmt.Errorf("cluster-id is required (cannot be determined from cloud)")
 	}
+	klog.Infof("cluster-id: %s", clusterID)
 
 	if internalIP == nil {
-		glog.Errorf("Cannot determine internal IP")
+		klog.Errorf("Cannot determine internal IP")
 		os.Exit(1)
 	}
 
 	if dnsInternalSuffix == "" {
 		// TODO: Maybe only master needs DNS?
 		dnsInternalSuffix = ".internal." + clusterID
-		glog.Infof("Setting dns-internal-suffix to %q", dnsInternalSuffix)
+		klog.Infof("Setting dns-internal-suffix to %q", dnsInternalSuffix)
 	}
 
 	// Make sure it's actually a suffix (starts with .)
@@ -173,7 +207,6 @@ func run() error {
 	}
 
 	protokube.RootFS = rootfs
-	protokube.Containerized = containerized
 
 	var dnsProvider protokube.DNSProvider
 
@@ -197,53 +230,83 @@ func run() error {
 				return err
 			}
 			gossipName = volumes.(*protokube.GCEVolumes).InstanceName()
+		} else if cloud == "openstack" {
+			gossipSeeds, err = volumes.(*protokube.OpenstackVolumes).GossipSeeds()
+			if err != nil {
+				return err
+			}
+			gossipName = volumes.(*protokube.OpenstackVolumes).InstanceName()
+		} else if cloud == "digitalocean" {
+			gossipSeeds, err = volumes.(*protokube.DOVolumes).GossipSeeds()
+			if err != nil {
+				return err
+			}
+			gossipName = volumes.(*protokube.DOVolumes).InstanceName()
+		} else if cloud == "azure" {
+			gossipSeeds, err = volumes.(*protokube.AzureVolumes).GossipSeeds()
+			if err != nil {
+				return err
+			}
+			gossipName = volumes.(*protokube.AzureVolumes).InstanceID()
 		} else {
-			glog.Fatalf("seed provider for %q not yet implemented", cloud)
+			klog.Fatalf("seed provider for %q not yet implemented", cloud)
 		}
 
 		id := os.Getenv("HOSTNAME")
 		if id == "" {
-			glog.Warningf("Unable to fetch HOSTNAME for use as node identifier")
+			klog.Warningf("Unable to fetch HOSTNAME for use as node identifier")
 		}
 
 		channelName := "dns"
-		gossipState, err := mesh.NewMeshGossiper(gossipListen, channelName, gossipName, []byte(gossipSecret), gossipSeeds)
+		var gossipState gossip.GossipState
+
+		gossipState, err = gossip.GetGossipState(gossipProtocol, gossipListen, channelName, gossipName, []byte(gossipSecret), gossipSeeds)
 		if err != nil {
-			glog.Errorf("Error initializing gossip: %v", err)
+			klog.Errorf("Error initializing gossip: %v", err)
 			os.Exit(1)
 		}
 
+		if gossipProtocolSecondary != "" {
+
+			secondaryGossipState, err := gossip.GetGossipState(gossipProtocolSecondary, gossipListenSecondary, channelName, gossipName, []byte(gossipSecretSecondary), gossipSeeds)
+			if err != nil {
+				klog.Errorf("Error initializing secondary gossip: %v", err)
+				os.Exit(1)
+			}
+
+			gossipState = &gossip.MultiGossipState{
+				Primary:   gossipState,
+				Secondary: secondaryGossipState,
+			}
+		}
 		go func() {
 			err := gossipState.Start()
 			if err != nil {
-				glog.Fatalf("gossip exited unexpectedly: %v", err)
+				klog.Fatalf("gossip exited unexpectedly: %v", err)
 			} else {
-				glog.Fatalf("gossip exited unexpectedly, but without error")
+				klog.Fatalf("gossip exited unexpectedly, but without error")
 			}
 		}()
 
 		dnsView := gossipdns.NewDNSView(gossipState)
-		go func() {
-			gossipdns.RunDNSUpdates(dnsTarget, dnsView)
-			glog.Fatalf("RunDNSUpdates exited unexpectedly")
-		}()
-
 		zoneInfo := gossipdns.DNSZoneInfo{
 			Name: gossipdns.DefaultZoneName,
 		}
+		if _, err := dnsView.AddZone(zoneInfo); err != nil {
+			klog.Fatalf("error creating zone: %v", err)
+		}
+
+		go func() {
+			gossipdns.RunDNSUpdates(dnsTarget, dnsView)
+			klog.Fatalf("RunDNSUpdates exited unexpectedly")
+		}()
+
 		dnsProvider = &protokube.GossipDnsProvider{DNSView: dnsView, Zone: zoneInfo}
 	} else {
 		var dnsScope dns.Scope
 		var dnsController *dns.DNSController
 		{
 			var file io.Reader
-			if dnsProviderID == k8scoredns.ProviderName {
-				var lines []string
-				lines = append(lines, "etcd-endpoints = "+dnsServer)
-				lines = append(lines, "zones = "+zones[0])
-				config := "[global]\n" + strings.Join(lines, "\n") + "\n"
-				file = bytes.NewReader([]byte(config))
-			}
 
 			dnsProvider, err := dnsprovider.GetDnsProvider(dnsProviderID, file)
 			if err != nil {
@@ -258,7 +321,7 @@ func run() error {
 				return fmt.Errorf("unexpected zone flags: %q", err)
 			}
 
-			dnsController, err = dns.NewDNSController([]dnsprovider.Interface{dnsProvider}, zoneRules)
+			dnsController, err = dns.NewDNSController([]dnsprovider.Interface{dnsProvider}, zoneRules, dnsUpdateInterval)
 			if err != nil {
 				return err
 			}
@@ -277,7 +340,10 @@ func run() error {
 			DNSController: dnsController,
 		}
 	}
-	modelDir := "model/etcd"
+
+	go func() {
+		removeDNSRecords(removeDNSNames, dnsProvider)
+	}()
 
 	var channels []string
 	if flagChannels != "" {
@@ -285,27 +351,15 @@ func run() error {
 	}
 
 	k := &protokube.KubeBoot{
-		ApplyTaints:           applyTaints,
-		Channels:              channels,
-		DNS:                   dnsProvider,
-		EtcdImageSource:       etcdImageSource,
-		EtcdElectionTimeout:   etcdElectionTimeout,
-		EtcdHeartbeatInterval: etcdHeartbeatInterval,
-		InitializeRBAC:        initializeRBAC,
-		InternalDNSSuffix:     dnsInternalSuffix,
-		InternalIP:            internalIP,
-		Kubernetes:            protokube.NewKubernetesContext(),
-		Master:                master,
-		ModelDir:              modelDir,
-		PeerCA:                peerCA,
-		PeerCert:              peerCert,
-		PeerKey:               peerKey,
-		TLSCA:                 tlsCA,
-		TLSCert:               tlsCert,
-		TLSKey:                tlsKey,
+		BootstrapMasterNodeLabels: bootstrapMasterNodeLabels,
+		NodeName:                  nodeName,
+		Channels:                  channels,
+		DNS:                       dnsProvider,
+		InternalDNSSuffix:         dnsInternalSuffix,
+		InternalIP:                internalIP,
+		Kubernetes:                protokube.NewKubernetesContext(),
+		Master:                    master,
 	}
-
-	k.Init(volumes)
 
 	if dnsProvider != nil {
 		go dnsProvider.Run()
@@ -314,67 +368,4 @@ func run() error {
 	k.RunSyncLoop()
 
 	return fmt.Errorf("Unexpected exit")
-}
-
-// TODO: run with --net=host ??
-func findInternalIP() (net.IP, error) {
-	var ips []net.IP
-
-	networkInterfaces, err := net.Interfaces()
-	if err != nil {
-		return nil, fmt.Errorf("error querying interfaces to determine internal ip: %v", err)
-	}
-
-	for i := range networkInterfaces {
-		networkInterface := &networkInterfaces[i]
-		flags := networkInterface.Flags
-		name := networkInterface.Name
-
-		if (flags & net.FlagLoopback) != 0 {
-			glog.V(2).Infof("Ignoring interface %s - loopback", name)
-			continue
-		}
-
-		// Not a lot else to go on...
-		if !strings.HasPrefix(name, "eth") {
-			glog.V(2).Infof("Ignoring interface %s - name does not look like ethernet device", name)
-			continue
-		}
-
-		addrs, err := networkInterface.Addrs()
-		if err != nil {
-			return nil, fmt.Errorf("error querying network interface %s for IP adddresses: %v", name, err)
-		}
-
-		for _, addr := range addrs {
-			ip, _, err := net.ParseCIDR(addr.String())
-			if err != nil {
-				return nil, fmt.Errorf("error parsing address %s on network interface %s: %v", addr.String(), name, err)
-			}
-
-			if ip.IsLoopback() {
-				glog.V(2).Infof("Ignoring address %s (loopback)", ip)
-				continue
-			}
-
-			if ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() {
-				glog.V(2).Infof("Ignoring address %s (link-local)", ip)
-				continue
-			}
-
-			ips = append(ips, ip)
-		}
-	}
-
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("unable to determine internal ip (no adddresses found)")
-	}
-
-	if len(ips) != 1 {
-		glog.Warningf("Found multiple internal IPs; making arbitrary choice")
-		for _, ip := range ips {
-			glog.Warningf("\tip: %s", ip.String())
-		}
-	}
-	return ips[0], nil
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,20 +17,25 @@ limitations under the License.
 package cloudup
 
 import (
-	"io/ioutil"
+	"os"
 	"path"
-	"strings"
 	"testing"
 
-	api "k8s.io/kops/pkg/apis/kops"
+	kopsapi "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
-	"k8s.io/kops/pkg/diff"
+	"k8s.io/kops/pkg/client/simple/vfsclientset"
+	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/pkg/kopscodecs"
+	"k8s.io/kops/pkg/model"
+	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/pkg/templates"
 	"k8s.io/kops/pkg/testutils"
+	"k8s.io/kops/pkg/testutils/golden"
 	"k8s.io/kops/upup/models"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/bootstrapchannelbuilder"
 	"k8s.io/kops/upup/pkg/fi/fitasks"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
 func TestBootstrapChannelBuilder_BuildTasks(t *testing.T) {
@@ -39,47 +44,126 @@ func TestBootstrapChannelBuilder_BuildTasks(t *testing.T) {
 
 	h.SetupMockAWS()
 
-	runChannelBuilderTest(t, "simple")
-	runChannelBuilderTest(t, "kopeio-vxlan")
-	runChannelBuilderTest(t, "weave")
+	runChannelBuilderTest(t, "simple", []string{"kops-controller.addons.k8s.io-k8s-1.16"})
+	// Use cilium networking, proxy
+	runChannelBuilderTest(t, "cilium", []string{"kops-controller.addons.k8s.io-k8s-1.16"})
+	runChannelBuilderTest(t, "weave", []string{})
+	runChannelBuilderTest(t, "amazonvpc", []string{"networking.amazon-vpc-routed-eni-k8s-1.16"})
+	runChannelBuilderTest(t, "amazonvpc-containerd", []string{"networking.amazon-vpc-routed-eni-k8s-1.16"})
+	runChannelBuilderTest(t, "awsiamauthenticator/crd", []string{"authentication.aws-k8s-1.12"})
+	runChannelBuilderTest(t, "awsiamauthenticator/mappings", []string{"authentication.aws-k8s-1.12"})
+	runChannelBuilderTest(t, "metrics-server/insecure-1.19", []string{"metrics-server.addons.k8s.io-k8s-1.11"})
+	runChannelBuilderTest(t, "metrics-server/secure-1.19", []string{"metrics-server.addons.k8s.io-k8s-1.11"})
+	runChannelBuilderTest(t, "coredns", []string{"coredns.addons.k8s.io-k8s-1.12"})
 }
 
-func runChannelBuilderTest(t *testing.T, key string) {
+func TestBootstrapChannelBuilder_ServiceAccountIAM(t *testing.T) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.SetupMockAWS()
+
+	featureflag.ParseFlags("+UseServiceAccountExternalPermissions")
+	unsetFeatureFlag := func() {
+		featureflag.ParseFlags("-UseServiceAccountExternalPermissions")
+	}
+	defer unsetFeatureFlag()
+	runChannelBuilderTest(t, "service-account-iam", []string{"dns-controller.addons.k8s.io-k8s-1.12", "kops-controller.addons.k8s.io-k8s-1.16"})
+}
+
+func TestBootstrapChannelBuilder_AWSCloudController(t *testing.T) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.SetupMockAWS()
+
+	runChannelBuilderTest(t, "awscloudcontroller", []string{"aws-cloud-controller.addons.k8s.io-k8s-1.18"})
+}
+
+func runChannelBuilderTest(t *testing.T, key string, addonManifests []string) {
 	basedir := path.Join("tests/bootstrapchannelbuilder/", key)
 
 	clusterYamlPath := path.Join(basedir, "cluster.yaml")
-	clusterYaml, err := ioutil.ReadFile(clusterYamlPath)
+	clusterYaml, err := os.ReadFile(clusterYamlPath)
 	if err != nil {
 		t.Fatalf("error reading cluster yaml file %q: %v", clusterYamlPath, err)
 	}
-	obj, _, err := kopscodecs.ParseVersionedYaml(clusterYaml)
+	obj, _, err := kopscodecs.Decode(clusterYaml, nil)
 	if err != nil {
 		t.Fatalf("error parsing cluster yaml %q: %v", clusterYamlPath, err)
 	}
-	cluster := obj.(*api.Cluster)
+	cluster := obj.(*kopsapi.Cluster)
 
-	if err := PerformAssignments(cluster); err != nil {
-		t.Fatalf("error from PerformAssignments: %v", err)
+	cloud, err := BuildCloud(cluster)
+	if err != nil {
+		t.Fatalf("error from BuildCloud: %v", err)
 	}
 
-	fullSpec, err := mockedPopulateClusterSpec(cluster)
+	if err := PerformAssignments(cluster, cloud); err != nil {
+		t.Fatalf("error from PerformAssignments for %q: %v", key, err)
+	}
+
+	fullSpec, err := mockedPopulateClusterSpec(cluster, cloud)
 	if err != nil {
-		t.Fatalf("error from PopulateClusterSpec: %v", err)
+		t.Fatalf("error from PopulateClusterSpec for %q: %v", key, err)
 	}
 	cluster = fullSpec
 
 	templates, err := templates.LoadTemplates(cluster, models.NewAssetPath("cloudup/resources"))
 	if err != nil {
-		t.Fatalf("error building templates: %v", err)
+		t.Fatalf("error building templates for %q: %v", key, err)
 	}
-	tf := &TemplateFunctions{cluster: cluster}
-	tf.AddTo(templates.TemplateFunctions)
 
-	bcb := BootstrapChannelBuilder{
-		cluster:      cluster,
-		templates:    templates,
-		assetBuilder: assets.NewAssetBuilder(nil),
+	vfs.Context.ResetMemfsContext(true)
+
+	basePath, err := vfs.Context.BuildVfsPath("memfs://tests")
+	if err != nil {
+		t.Errorf("error building vfspath: %v", err)
 	}
+	clientset := vfsclientset.NewVFSClientset(basePath)
+
+	secretStore, err := clientset.SecretStore(cluster)
+	if err != nil {
+		t.Error(err)
+	}
+	role := "arn:aws:iam::1234567890108:instance-profile/kops-custom-node-role"
+	kopsModel := model.KopsModelContext{
+		IAMModelContext: iam.IAMModelContext{
+			Cluster:      cluster,
+			AWSAccountID: "123456789012",
+			AWSPartition: "aws-test",
+		},
+		Region: "us-east-1",
+		InstanceGroups: []*kopsapi.InstanceGroup{
+			{
+				Spec: kopsapi.InstanceGroupSpec{
+					IAM: &kopsapi.IAMProfileSpec{
+						Profile: &role,
+					},
+					Role: kopsapi.InstanceGroupRoleNode,
+				},
+			},
+			{
+				Spec: kopsapi.InstanceGroupSpec{
+					Role: kopsapi.InstanceGroupRoleNode,
+				},
+			},
+		},
+	}
+
+	tf := &TemplateFunctions{
+		KopsModelContext: kopsModel,
+		cloud:            cloud,
+	}
+	tf.AddTo(templates.TemplateFunctions, secretStore)
+
+	bcb := bootstrapchannelbuilder.NewBootstrapChannelBuilder(
+		&kopsModel,
+		fi.LifecycleSync,
+		assets.NewAssetBuilder(cluster, false),
+		templates,
+		nil,
+	)
 
 	context := &fi.ModelBuilderContext{
 		Tasks: make(map[string]fi.Task),
@@ -89,28 +173,40 @@ func runChannelBuilderTest(t *testing.T, key string) {
 		t.Fatalf("error from BootstrapChannelBuilder Build: %v", err)
 	}
 
-	name := cluster.ObjectMeta.Name + "-addons-bootstrap"
-	manifestTask := context.Tasks[name]
-	if manifestTask == nil {
-		t.Fatalf("manifest task not found (%q)", name)
+	{
+		name := cluster.ObjectMeta.Name + "-addons-bootstrap"
+		manifestTask := context.Tasks["ManagedFile/"+name]
+		if manifestTask == nil {
+			t.Fatalf("manifest task not found (%q)", name)
+		}
+
+		manifestFileTask := manifestTask.(*fitasks.ManagedFile)
+		actualManifest, err := fi.ResourceAsString(manifestFileTask.Contents)
+		if err != nil {
+			t.Fatalf("error getting manifest as string: %v", err)
+		}
+
+		expectedManifestPath := path.Join(basedir, "manifest.yaml")
+		golden.AssertMatchesFile(t, actualManifest, expectedManifestPath)
 	}
 
-	manifestFileTask := manifestTask.(*fitasks.ManagedFile)
-	actualManifest, err := manifestFileTask.Contents.AsString()
-	if err != nil {
-		t.Fatalf("error getting manifest as string: %v", err)
-	}
+	for _, k := range addonManifests {
+		name := cluster.ObjectMeta.Name + "-addons-" + k
+		manifestTask := context.Tasks["ManagedFile/"+name]
+		if manifestTask == nil {
+			for k := range context.Tasks {
+				t.Logf("found task %s", k)
+			}
+			t.Fatalf("manifest task not found (%q)", name)
+		}
 
-	expectedManifestPath := path.Join(basedir, "manifest.yaml")
-	expectedManifest, err := ioutil.ReadFile(expectedManifestPath)
-	if err != nil {
-		t.Fatalf("error reading file %q: %v", expectedManifestPath, err)
-	}
+		manifestFileTask := manifestTask.(*fitasks.ManagedFile)
+		actualManifest, err := fi.ResourceAsString(manifestFileTask.Contents)
+		if err != nil {
+			t.Fatalf("error getting manifest as string: %v", err)
+		}
 
-	if strings.TrimSpace(string(expectedManifest)) != strings.TrimSpace(actualManifest) {
-		diffString := diff.FormatDiff(string(expectedManifest), actualManifest)
-		t.Logf("diff:\n%s\n", diffString)
-
-		t.Fatalf("manifest differed from expected for test %q", key)
+		expectedManifestPath := path.Join(basedir, k+".yaml")
+		golden.AssertMatchesFile(t, actualManifest, expectedManifestPath)
 	}
 }

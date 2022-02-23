@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,17 +23,18 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=SecurityGroup
+// +kops:fitask
 type SecurityGroup struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	ID          *string
 	Description *string
@@ -43,10 +44,14 @@ type SecurityGroup struct {
 
 	// Shared is set if this is a shared security group (one we don't create or own)
 	Shared *bool
+
+	Tags map[string]string
 }
 
-var _ fi.CompareWithID = &SecurityGroup{}
-var _ fi.ProducesDeletions = &SecurityGroup{}
+var (
+	_ fi.CompareWithID     = &SecurityGroup{}
+	_ fi.ProducesDeletions = &SecurityGroup{}
+)
 
 func (e *SecurityGroup) CompareWithID() *string {
 	return e.ID
@@ -74,9 +79,10 @@ func (e *SecurityGroup) Find(c *fi.Context) (*SecurityGroup, error) {
 		Name:        sg.GroupName,
 		Description: sg.Description,
 		VPC:         &VPC{ID: sg.VpcId},
+		Tags:        intersectTags(sg.Tags, e.Tags),
 	}
 
-	glog.V(2).Infof("found matching SecurityGroup %q", *actual.ID)
+	klog.V(2).Infof("found matching SecurityGroup %q", *actual.ID)
 	e.ID = actual.ID
 
 	actual.RemoveExtraRules = e.RemoveExtraRules
@@ -93,26 +99,21 @@ func (e *SecurityGroup) Find(c *fi.Context) (*SecurityGroup, error) {
 
 func (e *SecurityGroup) findEc2(c *fi.Context) (*ec2.SecurityGroup, error) {
 	cloud := c.Cloud.(awsup.AWSCloud)
-
-	var vpcID *string
-	if e.VPC != nil {
-		vpcID = e.VPC.ID
-	}
-
-	if vpcID == nil {
-		return nil, nil
-	}
-
 	request := &ec2.DescribeSecurityGroupsInput{}
 
 	if fi.StringValue(e.ID) != "" {
+		// Find by ID.
 		request.GroupIds = []*string{e.ID}
-	} else {
+	} else if fi.StringValue(e.Name) != "" && e.VPC != nil && e.VPC.ID != nil {
+		// Find by filters (name and VPC ID).
 		filters := cloud.BuildFilters(e.Name)
-		filters = append(filters, awsup.NewEC2Filter("vpc-id", *vpcID))
+		filters = append(filters, awsup.NewEC2Filter("vpc-id", *e.VPC.ID))
 		filters = append(filters, awsup.NewEC2Filter("group-name", *e.Name))
-
 		request.Filters = filters
+
+	} else {
+		// No reason to try.
+		return nil, nil
 	}
 
 	response, err := cloud.EC2().DescribeSecurityGroups(request)
@@ -146,7 +147,7 @@ func (_ *SecurityGroup) CheckChanges(a, e, changes *SecurityGroup) error {
 		if changes.ID != nil {
 			return fi.CannotChangeField("ID")
 		}
-		if changes.Name != nil {
+		if changes.Name != nil && !fi.BoolValue(e.Shared) {
 			return fi.CannotChangeField("Name")
 		}
 		if changes.VPC != nil {
@@ -164,12 +165,13 @@ func (_ *SecurityGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Security
 	}
 
 	if a == nil {
-		glog.V(2).Infof("Creating SecurityGroup with Name:%q VPC:%q", *e.Name, *e.VPC.ID)
+		klog.V(2).Infof("Creating SecurityGroup with Name:%q VPC:%q", *e.Name, *e.VPC.ID)
 
 		request := &ec2.CreateSecurityGroupInput{
-			VpcId:       e.VPC.ID,
-			GroupName:   e.Name,
-			Description: e.Description,
+			VpcId:             e.VPC.ID,
+			GroupName:         e.Name,
+			Description:       e.Description,
+			TagSpecifications: awsup.EC2TagSpecification(ec2.ResourceTypeSecurityGroup, e.Tags),
 		}
 
 		response, err := t.Cloud.EC2().CreateSecurityGroup(request)
@@ -180,19 +182,17 @@ func (_ *SecurityGroup) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Security
 		e.ID = response.GroupId
 	}
 
-	return t.AddAWSTags(*e.ID, t.Cloud.BuildTags(e.Name))
+	return t.AddAWSTags(*e.ID, e.Tags)
 }
 
 type terraformSecurityGroup struct {
-	Name        *string            `json:"name"`
-	VPCID       *terraform.Literal `json:"vpc_id"`
-	Description *string            `json:"description"`
-	Tags        map[string]string  `json:"tags,omitempty"`
+	Name        *string                  `cty:"name"`
+	VPCID       *terraformWriter.Literal `cty:"vpc_id"`
+	Description *string                  `cty:"description"`
+	Tags        map[string]string        `cty:"tags"`
 }
 
 func (_ *SecurityGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *SecurityGroup) error {
-	cloud := t.Cloud.(awsup.AWSCloud)
-
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		// Not terraform owned / managed
@@ -203,28 +203,28 @@ func (_ *SecurityGroup) RenderTerraform(t *terraform.TerraformTarget, a, e, chan
 		Name:        e.Name,
 		VPCID:       e.VPC.TerraformLink(),
 		Description: e.Description,
-		Tags:        cloud.BuildTags(e.Name),
+		Tags:        e.Tags,
 	}
 
 	return t.RenderResource("aws_security_group", *e.Name, tf)
 }
 
-func (e *SecurityGroup) TerraformLink() *terraform.Literal {
+func (e *SecurityGroup) TerraformLink() *terraformWriter.Literal {
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		// Not terraform owned / managed
 		if e.ID != nil {
-			return terraform.LiteralFromStringValue(*e.ID)
+			return terraformWriter.LiteralFromStringValue(*e.ID)
 		} else {
-			glog.Warningf("ID not set on shared subnet %v", e)
+			klog.Warningf("ID not set on shared subnet %v", e)
 		}
 	}
 
-	return terraform.LiteralProperty("aws_security_group", *e.Name, "id")
+	return terraformWriter.LiteralProperty("aws_security_group", *e.Name, "id")
 }
 
 type cloudformationSecurityGroup struct {
-	//Name        *string            `json:"name"`
+	GroupName   *string                 `json:"GroupName"`
 	VpcId       *cloudformation.Literal `json:"VpcId"`
 	Description *string                 `json:"GroupDescription"`
 	Tags        []cloudformationTag     `json:"Tags,omitempty"`
@@ -237,13 +237,11 @@ func (_ *SecurityGroup) RenderCloudformation(t *cloudformation.CloudformationTar
 		return nil
 	}
 
-	cloud := t.Cloud.(awsup.AWSCloud)
-
 	tf := &cloudformationSecurityGroup{
-		//Name:        e.Name,
+		GroupName:   e.Name,
 		VpcId:       e.VPC.CloudformationLink(),
 		Description: e.Description,
-		Tags:        buildCloudformationTags(cloud.BuildTags(e.Name)),
+		Tags:        buildCloudformationTags(e.Tags),
 	}
 
 	return t.RenderResource("AWS::EC2::SecurityGroup", *e.Name, tf)
@@ -256,7 +254,7 @@ func (e *SecurityGroup) CloudformationLink() *cloudformation.Literal {
 		if e.ID != nil {
 			return cloudformation.LiteralString(*e.ID)
 		} else {
-			glog.Warningf("ID not set on shared subnet %v", e)
+			klog.Warningf("ID not set on shared subnet %v", e)
 		}
 	}
 
@@ -264,39 +262,37 @@ func (e *SecurityGroup) CloudformationLink() *cloudformation.Literal {
 }
 
 type deleteSecurityGroupRule struct {
-	groupID    *string
-	permission *ec2.IpPermission
-	egress     bool
+	rule *ec2.SecurityGroupRule
 }
 
 var _ fi.Deletion = &deleteSecurityGroupRule{}
 
 func (d *deleteSecurityGroupRule) Delete(t fi.Target) error {
-	glog.V(2).Infof("deleting security group permission: %v", fi.DebugAsJsonString(d.permission))
+	klog.V(2).Infof("deleting security group permission: %v", fi.DebugAsJsonString(d.rule))
 
 	awsTarget, ok := t.(*awsup.AWSAPITarget)
 	if !ok {
 		return fmt.Errorf("unexpected target type for deletion: %T", t)
 	}
 
-	if d.egress {
+	if fi.BoolValue(d.rule.IsEgress) {
 		request := &ec2.RevokeSecurityGroupEgressInput{
-			GroupId: d.groupID,
+			GroupId:              d.rule.GroupId,
+			SecurityGroupRuleIds: []*string{d.rule.SecurityGroupRuleId},
 		}
-		request.IpPermissions = []*ec2.IpPermission{d.permission}
 
-		glog.V(2).Infof("Calling EC2 RevokeSecurityGroupEgress")
+		klog.V(2).Infof("Calling EC2 RevokeSecurityGroupEgress")
 		_, err := awsTarget.Cloud.EC2().RevokeSecurityGroupEgress(request)
 		if err != nil {
 			return fmt.Errorf("error revoking SecurityGroupEgress: %v", err)
 		}
 	} else {
 		request := &ec2.RevokeSecurityGroupIngressInput{
-			GroupId: d.groupID,
+			GroupId:              d.rule.GroupId,
+			SecurityGroupRuleIds: []*string{d.rule.SecurityGroupRuleId},
 		}
-		request.IpPermissions = []*ec2.IpPermission{d.permission}
 
-		glog.V(2).Infof("Calling EC2 RevokeSecurityGroupIngress")
+		klog.V(2).Infof("Calling EC2 RevokeSecurityGroupIngress")
 		_, err := awsTarget.Cloud.EC2().RevokeSecurityGroupIngress(request)
 		if err != nil {
 			return fmt.Errorf("error revoking SecurityGroupIngress: %v", err)
@@ -311,8 +307,8 @@ func (d *deleteSecurityGroupRule) TaskName() string {
 }
 
 func (d *deleteSecurityGroupRule) Item() string {
-	s := fi.StringValue(d.groupID) + ":"
-	p := d.permission
+	s := fi.StringValue(d.rule.GroupId) + ":"
+	p := d.rule
 	if aws.Int64Value(p.FromPort) != 0 {
 		s += fmt.Sprintf(" port=%d", aws.Int64Value(p.FromPort))
 		if aws.Int64Value(p.ToPort) != aws.Int64Value(p.FromPort) {
@@ -322,47 +318,15 @@ func (d *deleteSecurityGroupRule) Item() string {
 	if aws.StringValue(p.IpProtocol) != "-1" {
 		s += fmt.Sprintf(" protocol=%s", aws.StringValue(p.IpProtocol))
 	}
-	for _, ug := range p.UserIdGroupPairs {
-		s += fmt.Sprintf(" group=%s", aws.StringValue(ug.GroupId))
+	if p.ReferencedGroupInfo != nil {
+		s += fmt.Sprintf(" group=%s", aws.StringValue(p.ReferencedGroupInfo.GroupId))
 	}
-	for _, r := range p.IpRanges {
-		s += fmt.Sprintf(" ip=%s", aws.StringValue(r.CidrIp))
-	}
-	//permissionString := fi.DebugAsJsonString(d.permission)
-	//s += permissionString
+	s += fmt.Sprintf(" ip=%s", aws.StringValue(p.CidrIpv4))
+	s += fmt.Sprintf(" ipv6=%s", aws.StringValue(p.CidrIpv6))
+	// permissionString := fi.DebugAsJsonString(d.permission)
+	// s += permissionString
 
 	return s
-}
-
-func expandPermissions(sgID *string, permission *ec2.IpPermission, egress bool) []*ec2.IpPermission {
-	var rules []*ec2.IpPermission
-
-	master := &ec2.IpPermission{
-		FromPort:   permission.FromPort,
-		ToPort:     permission.ToPort,
-		IpProtocol: permission.IpProtocol,
-	}
-
-	for _, ipRange := range permission.IpRanges {
-		a := &ec2.IpPermission{}
-		*a = *master
-		a.IpRanges = []*ec2.IpRange{ipRange}
-		rules = append(rules, a)
-	}
-
-	for _, ug := range permission.UserIdGroupPairs {
-		a := &ec2.IpPermission{}
-		*a = *master
-		a.UserIdGroupPairs = []*ec2.UserIdGroupPair{ug}
-		rules = append(rules, a)
-	}
-
-	if len(rules) == 0 {
-		// If there are no group or cidr restrictions, it is just a generic rule
-		rules = append(rules, master)
-	}
-
-	return rules
 }
 
 func (e *SecurityGroup) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
@@ -389,26 +353,33 @@ func (e *SecurityGroup) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
 		return nil, nil
 	}
 
-	var ingress []*ec2.IpPermission
-	for _, permission := range sg.IpPermissions {
-		rules := expandPermissions(sg.GroupId, permission, false)
-		ingress = append(ingress, rules...)
+	cloud := c.Cloud.(awsup.AWSCloud)
+
+	request := &ec2.DescribeSecurityGroupRulesInput{
+		Filters: []*ec2.Filter{
+			awsup.NewEC2Filter("group-id", *e.ID),
+		},
 	}
 
-	for _, permission := range ingress {
+	response, err := cloud.EC2().DescribeSecurityGroupRules(request)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, permission := range response.SecurityGroupRules {
 		// Because of #478, we can't remove all non-matching security groups
 		// Instead we consider only certain rules to be 'in-scope'
 		// (in the model, we typically consider only rules on port 22 and 443)
 		match := false
 		for _, rule := range rules {
 			if rule.Matches(permission) {
-				glog.V(2).Infof("permission matches rule %s: %v", rule, permission)
+				klog.V(2).Infof("permission matches rule %s: %v", rule, permission)
 				match = true
 				break
 			}
 		}
 		if !match {
-			glog.V(4).Infof("Ignoring security group permission %q (did not match removal rules)", permission)
+			klog.V(4).Infof("Ignoring security group permission %q (did not match removal rules)", permission)
 			continue
 		}
 		found := false
@@ -419,7 +390,7 @@ func (e *SecurityGroup) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
 			}
 
 			if er.SourceGroup != nil && er.SourceGroup.ID == nil {
-				glog.V(4).Infof("Deletion skipping find of SecurityGroupRule %s, because SourceGroup was not found", fi.StringValue(er.Name))
+				klog.V(4).Infof("Deletion skipping find of SecurityGroupRule %s, because SourceGroup was not found", fi.StringValue(er.Name))
 				return nil, nil
 			}
 
@@ -429,34 +400,7 @@ func (e *SecurityGroup) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
 		}
 		if !found {
 			removals = append(removals, &deleteSecurityGroupRule{
-				groupID:    sg.GroupId,
-				permission: permission,
-				egress:     false,
-			})
-		}
-	}
-
-	var egress []*ec2.IpPermission
-	for _, permission := range sg.IpPermissionsEgress {
-		rules := expandPermissions(sg.GroupId, permission, true)
-		egress = append(egress, rules...)
-	}
-	for _, permission := range egress {
-		found := false
-		for _, t := range c.AllTasks() {
-			er, ok := t.(*SecurityGroupRule)
-			if !ok {
-				continue
-			}
-			if er.matches(permission) {
-				found = true
-			}
-		}
-		if !found {
-			removals = append(removals, &deleteSecurityGroupRule{
-				groupID:    sg.GroupId,
-				permission: permission,
-				egress:     true,
+				rule: permission,
 			})
 		}
 	}
@@ -466,7 +410,7 @@ func (e *SecurityGroup) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
 
 // RemovalRule is a rule that filters the permissions we should remove
 type RemovalRule interface {
-	Matches(permission *ec2.IpPermission) bool
+	Matches(permission *ec2.SecurityGroupRule) bool
 }
 
 // ParseRemovalRule parses our removal rule DSL into a RemovalRule
@@ -504,7 +448,7 @@ func (r *PortRemovalRule) String() string {
 	return fi.DebugAsJsonString(r)
 }
 
-func (r *PortRemovalRule) Matches(permission *ec2.IpPermission) bool {
+func (r *PortRemovalRule) Matches(permission *ec2.SecurityGroupRule) bool {
 	// Check if port matches
 	if permission.FromPort == nil || *permission.FromPort != int64(r.Port) {
 		return false

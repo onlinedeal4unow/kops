@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
+
 	"k8s.io/kops/protokube/pkg/etcd"
 	"k8s.io/kops/protokube/pkg/gossip"
 	gossipaws "k8s.io/kops/protokube/pkg/gossip/aws"
@@ -69,7 +70,7 @@ func NewAWSVolumes() (*AWSVolumes, error) {
 	}
 	s.Handlers.Send.PushFront(func(r *request.Request) {
 		// Log requests
-		glog.V(4).Infof("AWS API Request: %s/%s", r.ClientInfo.ServiceName, r.Operation.Name)
+		klog.V(4).Infof("AWS API Request: %s/%s", r.ClientInfo.ServiceName, r.Operation.Name)
 	})
 
 	a.metadata = ec2metadata.New(s, config)
@@ -125,7 +126,10 @@ func (a *AWSVolumes) discoverTags() error {
 
 	a.clusterTag = clusterID
 
-	a.internalIP = net.ParseIP(aws.StringValue(instance.PrivateIpAddress))
+	a.internalIP = net.ParseIP(aws.StringValue(instance.Ipv6Address))
+	if a.internalIP == nil {
+		a.internalIP = net.ParseIP(aws.StringValue(instance.PrivateIpAddress))
+	}
 	if a.internalIP == nil {
 		return fmt.Errorf("Internal IP not found on this instance (%q)", a.instanceId)
 	}
@@ -144,7 +148,6 @@ func (a *AWSVolumes) describeInstance() (*ec2.Instance, error) {
 		}
 		return true
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("error querying for EC2 instance %q: %v", a.instanceId, err)
 	}
@@ -191,7 +194,7 @@ func (a *AWSVolumes) findVolumes(request *ec2.DescribeVolumesInput) ([]*Volume, 
 			// never mount root volumes
 			// these are volumes that aws sets aside for root volumes mount points
 			if vol.LocalDevice == "/dev/sda1" || vol.LocalDevice == "/dev/xvda" {
-				glog.Warningf("Not mounting: %q, since it is a root volume", vol.LocalDevice)
+				klog.Warningf("Not mounting: %q, since it is a root volume", vol.LocalDevice)
 				continue
 			}
 
@@ -206,10 +209,10 @@ func (a *AWSVolumes) findVolumes(request *ec2.DescribeVolumesInput) ([]*Volume, 
 					{
 						// Ignore
 					}
-				//case TagNameMasterId:
+				// case TagNameMasterId:
 				//	id, err := strconv.Atoi(v)
 				//	if err != nil {
-				//		glog.Warningf("error parsing master-id tag on volume %q %s=%s; skipping volume", volumeID, k, v)
+				//		klog.Warningf("error parsing master-id tag on volume %q %s=%s; skipping volume", volumeID, k, v)
 				//		skipVolume = true
 				//	} else {
 				//		vol.Info.MasterID = id
@@ -220,14 +223,16 @@ func (a *AWSVolumes) findVolumes(request *ec2.DescribeVolumesInput) ([]*Volume, 
 						spec, err := etcd.ParseEtcdClusterSpec(etcdClusterName, v)
 						if err != nil {
 							// Fail safe
-							glog.Warningf("error parsing etcd cluster tag %q on volume %q; skipping volume: %v", v, volumeID, err)
+							klog.Warningf("error parsing etcd cluster tag %q on volume %q; skipping volume: %v", v, volumeID, err)
 							skipVolume = true
 						}
 						vol.Info.EtcdClusters = append(vol.Info.EtcdClusters, spec)
 					} else if strings.HasPrefix(k, awsup.TagNameRolePrefix) {
 						// Ignore
+					} else if strings.HasPrefix(k, awsup.TagNameClusterOwnershipPrefix) {
+						// Ignore
 					} else {
-						glog.Warningf("unknown tag on volume %q: %s=%s", volumeID, k, v)
+						klog.Warningf("unknown tag on volume %q: %s=%s", volumeID, k, v)
 					}
 				}
 			}
@@ -238,7 +243,6 @@ func (a *AWSVolumes) findVolumes(request *ec2.DescribeVolumesInput) ([]*Volume, 
 		}
 		return true
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("error querying for EC2 volumes: %v", err)
 	}
@@ -302,7 +306,7 @@ func (v *AWSVolumes) FindMountedVolume(volume *Volume) (string, error) {
 			return "", fmt.Errorf("error checking for nvme volume %q: %v", expected, err)
 		}
 		if device != "" {
-			glog.Infof("found nvme volume %q at %q", expected, device)
+			klog.Infof("found nvme volume %q at %q", expected, device)
 			return device, nil
 		}
 	}
@@ -311,18 +315,18 @@ func (v *AWSVolumes) FindMountedVolume(volume *Volume) (string, error) {
 }
 
 func findNvmeVolume(findName string) (device string, err error) {
-	p := pathFor("/dev/disk/by-id/" + findName)
+	p := pathFor(filepath.Join("/dev/disk/by-id", findName))
 	stat, err := os.Lstat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			glog.V(4).Infof("nvme path not found %q", p)
+			klog.V(4).Infof("nvme path not found %q", p)
 			return "", nil
 		}
 		return "", fmt.Errorf("error getting stat of %q: %v", p, err)
 	}
 
 	if stat.Mode()&os.ModeSymlink != os.ModeSymlink {
-		glog.Warningf("nvme file %q found, but was not a symlink", p)
+		klog.Warningf("nvme file %q found, but was not a symlink", p)
 		return "", nil
 	}
 
@@ -365,7 +369,7 @@ func (a *AWSVolumes) releaseDevice(d string, volumeID string) {
 	defer a.mutex.Unlock()
 
 	if a.deviceMap[d] != volumeID {
-		glog.Fatalf("deviceMap logic error: %q -> %q, not %q", d, a.deviceMap[d], volumeID)
+		klog.Fatalf("deviceMap logic error: %q -> %q, not %q", d, a.deviceMap[d], volumeID)
 	}
 	a.deviceMap[d] = ""
 }
@@ -393,7 +397,7 @@ func (a *AWSVolumes) AttachVolume(volume *Volume) error {
 			return fmt.Errorf("Error attaching EBS volume %q: %v", volumeID, err)
 		}
 
-		glog.V(2).Infof("AttachVolume request returned %v", attachResponse)
+		klog.V(2).Infof("AttachVolume request returned %v", attachResponse)
 	}
 
 	// Wait (forever) for volume to attach or reach a failure-to-attach condition
@@ -421,16 +425,15 @@ func (a *AWSVolumes) AttachVolume(volume *Volume) error {
 
 				volume.LocalDevice = device
 				return nil
-			} else {
-				a.releaseDevice(device, volumeID)
-
-				return fmt.Errorf("Unable to attach volume %q, was attached to %q", volumeID, v.AttachedTo)
 			}
+			a.releaseDevice(device, volumeID)
+
+			return fmt.Errorf("Unable to attach volume %q, was attached to %q", volumeID, v.AttachedTo)
 		}
 
 		switch v.Status {
 		case "attaching":
-			glog.V(2).Infof("Waiting for volume %q to be attached (currently %q)", volumeID, v.Status)
+			klog.V(2).Infof("Waiting for volume %q to be attached (currently %q)", volumeID, v.Status)
 			// continue looping
 
 		default:

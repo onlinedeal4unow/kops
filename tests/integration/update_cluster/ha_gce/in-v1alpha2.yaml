@@ -1,7 +1,7 @@
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: Cluster
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   name: ha-gce.example.com
 spec:
   api:
@@ -14,32 +14,37 @@ spec:
   etcdClusters:
   - etcdMembers:
     - instanceGroup: master-us-test1-a
-      name: a
+      name: "1"
     - instanceGroup: master-us-test1-b
-      name: b
+      name: "2"
     - instanceGroup: master-us-test1-c
-      name: c
+      name: "3"
     name: main
   - etcdMembers:
     - instanceGroup: master-us-test1-a
-      name: a
+      name: "1"
     - instanceGroup: master-us-test1-b
-      name: b
+      name: "2"
     - instanceGroup: master-us-test1-c
-      name: c
+      name: "3"
     name: events
+  gceServiceAccount: default
   iam:
     legacy: false
+  kubelet:
+    anonymousAuth: false
   kubernetesApiAccess:
   - 0.0.0.0/0
-  kubernetesVersion: v1.8.0-beta.1
+  - ::/0
+  kubernetesVersion: v1.21.0
   masterPublicName: api.ha-gce.example.com
   networking:
-    kubenet: {}
+    cni: {}
   nonMasqueradeCIDR: 100.64.0.0/10
   project: testproject
   sshAccess:
   - 0.0.0.0/0
+  - ::/0
   subnets:
   - name: us-test1
     region: us-test1
@@ -52,10 +57,10 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha-gce.example.com
   name: master-us-test1-a
@@ -72,10 +77,10 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha-gce.example.com
   name: master-us-test1-b
@@ -92,10 +97,10 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha-gce.example.com
   name: master-us-test1-c
@@ -112,10 +117,10 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha-gce.example.com
   name: nodes

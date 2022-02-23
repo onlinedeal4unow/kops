@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,31 +17,33 @@ limitations under the License.
 package awstasks
 
 import (
-	"fmt"
-
 	"encoding/json"
-
+	"fmt"
 	"net/url"
 	"reflect"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/diff"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=IAMRole
+// +kops:fitask
 type IAMRole struct {
 	ID        *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
-	Name               *string
-	RolePolicyDocument *fi.ResourceHolder // "inline" IAM policy
+	Name                *string
+	RolePolicyDocument  fi.Resource // "inline" IAM policy
+	PermissionsBoundary *string
+
+	Tags map[string]string
 
 	// ExportWithId will expose the name & ARN for reuse as part of a larger system.  Only supported by terraform currently.
 	ExportWithID *string
@@ -60,7 +62,7 @@ func (e *IAMRole) Find(c *fi.Context) (*IAMRole, error) {
 
 	response, err := cloud.IAM().GetRole(request)
 	if awsErr, ok := err.(awserr.Error); ok {
-		if awsErr.Code() == "NoSuchEntity" {
+		if awsErr.Code() == iam.ErrCodeNoSuchEntityException {
 			return nil, nil
 		}
 	}
@@ -72,42 +74,46 @@ func (e *IAMRole) Find(c *fi.Context) (*IAMRole, error) {
 	actual := &IAMRole{}
 	actual.ID = r.RoleId
 	actual.Name = r.RoleName
+	if r.PermissionsBoundary != nil {
+		actual.PermissionsBoundary = r.PermissionsBoundary.PermissionsBoundaryArn
+	}
 	if r.AssumeRolePolicyDocument != nil {
 		// The AssumeRolePolicyDocument is URI encoded (?)
 		actualPolicy := *r.AssumeRolePolicyDocument
 		actualPolicy, err = url.QueryUnescape(actualPolicy)
 		if err != nil {
-			return nil, fmt.Errorf("error parsing AssumeRolePolicyDocument for IAMRole %q: %v", e.Name, err)
+			return nil, fmt.Errorf("error parsing AssumeRolePolicyDocument for IAMRole %s: %v", *e.Name, err)
 		}
 
 		// The RolePolicyDocument is reformatted by AWS
 		// We parse both as JSON; if the json forms are equal we pretend the actual value is the expected value
 		if e.RolePolicyDocument != nil {
-			expectedPolicy, err := e.RolePolicyDocument.AsString()
+			expectedPolicy, err := fi.ResourceAsString(e.RolePolicyDocument)
 			if err != nil {
-				return nil, fmt.Errorf("error reading expected RolePolicyDocument for IAMRole %q: %v", e.Name, err)
+				return nil, fmt.Errorf("error reading expected RolePolicyDocument for IAMRole %q: %v", aws.StringValue(e.Name), err)
 			}
 			expectedJson := make(map[string]interface{})
 			err = json.Unmarshal([]byte(expectedPolicy), &expectedJson)
 			if err != nil {
-				return nil, fmt.Errorf("error parsing expected RolePolicyDocument for IAMRole %q: %v", e.Name, err)
+				return nil, fmt.Errorf("error parsing expected RolePolicyDocument for IAMRole %q: %v", aws.StringValue(e.Name), err)
 			}
 			actualJson := make(map[string]interface{})
 			err = json.Unmarshal([]byte(actualPolicy), &actualJson)
 			if err != nil {
-				return nil, fmt.Errorf("error parsing actual RolePolicyDocument for IAMRole %q: %v", e.Name, err)
+				return nil, fmt.Errorf("error parsing actual RolePolicyDocument for IAMRole %q: %v", aws.StringValue(e.Name), err)
 			}
 
 			if reflect.DeepEqual(actualJson, expectedJson) {
-				glog.V(2).Infof("actual RolePolicyDocument was json-equal to expected; returning expected value")
+				klog.V(2).Infof("actual RolePolicyDocument was json-equal to expected; returning expected value")
 				actualPolicy = expectedPolicy
 			}
 		}
 
-		actual.RolePolicyDocument = fi.WrapResource(fi.NewStringResource(actualPolicy))
+		actual.RolePolicyDocument = fi.NewStringResource(actualPolicy)
 	}
+	actual.Tags = mapIAMTagsToMap(r.Tags)
 
-	glog.V(2).Infof("found matching IAMRole %q", *actual.ID)
+	klog.V(2).Infof("found matching IAMRole %q", aws.StringValue(actual.ID))
 	e.ID = actual.ID
 
 	// Avoid spurious changes
@@ -135,43 +141,130 @@ func (s *IAMRole) CheckChanges(a, e, changes *IAMRole) error {
 }
 
 func (_ *IAMRole) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *IAMRole) error {
-	policy, err := e.RolePolicyDocument.AsString()
+	if e.RolePolicyDocument == nil {
+		klog.V(2).Infof("Deleting IAM role %q", a.Name)
+
+		var attachedPolicies []*iam.AttachedPolicy
+		var policyNames []string
+
+		// List Inline policies
+		{
+			request := &iam.ListRolePoliciesInput{
+				RoleName: a.Name,
+			}
+			err := t.Cloud.IAM().ListRolePoliciesPages(request, func(page *iam.ListRolePoliciesOutput, lastPage bool) bool {
+				for _, policy := range page.PolicyNames {
+					policyNames = append(policyNames, aws.StringValue(policy))
+				}
+				return true
+			})
+			if err != nil {
+				if awsup.AWSErrorCode(err) == iam.ErrCodeNoSuchEntityException {
+					klog.V(2).Infof("Got NoSuchEntity describing IAM RolePolicy; will treat as already-deleted")
+					return nil
+				}
+
+				return fmt.Errorf("error listing IAM role policies: %v", err)
+			}
+		}
+
+		// List Attached Policies
+		{
+			request := &iam.ListAttachedRolePoliciesInput{
+				RoleName: a.Name,
+			}
+			err := t.Cloud.IAM().ListAttachedRolePoliciesPages(request, func(page *iam.ListAttachedRolePoliciesOutput, lastPage bool) bool {
+				attachedPolicies = append(attachedPolicies, page.AttachedPolicies...)
+				return true
+			})
+			if err != nil {
+				if awsup.AWSErrorCode(err) == iam.ErrCodeNoSuchEntityException {
+					klog.V(2).Infof("Got NoSuchEntity describing IAM RolePolicy; will treat as already-detached")
+					return nil
+				}
+
+				return fmt.Errorf("error listing IAM role policies for %v", err)
+			}
+		}
+
+		// Delete inline policies
+		for _, policyName := range policyNames {
+			klog.V(2).Infof("Deleting IAM role policy %q", policyName)
+			request := &iam.DeleteRolePolicyInput{
+				RoleName:   a.Name,
+				PolicyName: aws.String(policyName),
+			}
+			_, err := t.Cloud.IAM().DeleteRolePolicy(request)
+			if err != nil {
+				return fmt.Errorf("error deleting IAM role policy %q: %v", policyName, err)
+			}
+		}
+
+		// Detach Managed Policies
+		for _, policy := range attachedPolicies {
+			klog.V(2).Infof("Detaching IAM role policy %q", policy)
+			request := &iam.DetachRolePolicyInput{
+				RoleName:  a.Name,
+				PolicyArn: policy.PolicyArn,
+			}
+			_, err := t.Cloud.IAM().DetachRolePolicy(request)
+			if err != nil {
+				return fmt.Errorf("error detaching IAM role policy %q: %v", *policy.PolicyArn, err)
+			}
+		}
+
+		request := &iam.DeleteRoleInput{
+			RoleName: a.Name,
+		}
+		if _, err := t.Cloud.IAM().DeleteRole(request); err != nil {
+			return fmt.Errorf("error deleting IAM role: %v", err)
+		}
+		return nil
+	}
+
+	policy, err := fi.ResourceAsString(e.RolePolicyDocument)
 	if err != nil {
 		return fmt.Errorf("error rendering RolePolicyDocument: %v", err)
 	}
 
 	if a == nil {
-		glog.V(2).Infof("Creating IAMRole with Name:%q", *e.Name)
+		klog.V(2).Infof("Creating IAMRole with Name:%q", *e.Name)
 
 		request := &iam.CreateRoleInput{}
 		request.AssumeRolePolicyDocument = aws.String(policy)
 		request.RoleName = e.Name
+		request.Tags = mapToIAMTags(e.Tags)
+
+		if e.PermissionsBoundary != nil {
+			request.PermissionsBoundary = e.PermissionsBoundary
+		}
 
 		response, err := t.Cloud.IAM().CreateRole(request)
 		if err != nil {
+			klog.V(2).Infof("IAMRole policy: %s", policy)
 			return fmt.Errorf("error creating IAMRole: %v", err)
 		}
 
 		e.ID = response.Role.RoleId
 	} else {
 		if changes.RolePolicyDocument != nil {
-			glog.V(2).Infof("Updating IAMRole AssumeRolePolicy %q", *e.Name)
+			klog.V(2).Infof("Updating IAMRole AssumeRolePolicy %q", *e.Name)
 
 			var err error
 
 			actualPolicy := ""
 			if a.RolePolicyDocument != nil {
-				actualPolicy, err = a.RolePolicyDocument.AsString()
+				actualPolicy, err = fi.ResourceAsString(a.RolePolicyDocument)
 				if err != nil {
 					return fmt.Errorf("error reading actual policy document: %v", err)
 				}
 			}
 
 			if actualPolicy == policy {
-				glog.Warning("Policies were actually the same")
+				klog.Warning("Policies were actually the same")
 			} else {
 				d := diff.FormatDiff(actualPolicy, policy)
-				glog.V(2).Infof("diff: %s", d)
+				klog.V(2).Infof("diff: %s", d)
 			}
 
 			request := &iam.UpdateAssumeRolePolicyInput{}
@@ -183,19 +276,63 @@ func (_ *IAMRole) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *IAMRole) error
 				return fmt.Errorf("error updating IAMRole: %v", err)
 			}
 		}
-	}
+		if changes.PermissionsBoundary != nil {
+			klog.V(2).Infof("Updating IAMRole PermissionsBoundary %q", *e.Name)
 
-	// TODO: Should we use path as our tag?
-	return nil // No tags in IAM
+			request := &iam.PutRolePermissionsBoundaryInput{}
+			request.RoleName = e.Name
+			request.PermissionsBoundary = e.PermissionsBoundary
+
+			if _, err := t.Cloud.IAM().PutRolePermissionsBoundary(request); err != nil {
+				return fmt.Errorf("error updating IAMRole: %v", err)
+			}
+		} else if a.PermissionsBoundary != nil && e.PermissionsBoundary == nil {
+			request := &iam.DeleteRolePermissionsBoundaryInput{}
+			request.RoleName = e.Name
+
+			if _, err := t.Cloud.IAM().DeleteRolePermissionsBoundary(request); err != nil {
+				return fmt.Errorf("error updating IAMRole: %v", err)
+			}
+		}
+		if changes.Tags != nil {
+			if len(a.Tags) > 0 {
+				existingTagKeys := make([]*string, 0)
+				for k := range a.Tags {
+					existingTagKeys = append(existingTagKeys, &k)
+				}
+				untagRequest := &iam.UntagRoleInput{
+					RoleName: e.Name,
+					TagKeys:  existingTagKeys,
+				}
+				_, err = t.Cloud.IAM().UntagRole(untagRequest)
+				if err != nil {
+					return fmt.Errorf("error untagging IAMRole: %v", err)
+				}
+			}
+			if len(e.Tags) > 0 {
+				tagRequest := &iam.TagRoleInput{
+					RoleName: e.Name,
+					Tags:     mapToIAMTags(e.Tags),
+				}
+				_, err = t.Cloud.IAM().TagRole(tagRequest)
+				if err != nil {
+					return fmt.Errorf("error tagging IAMRole: %v", err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type terraformIAMRole struct {
-	Name             *string            `json:"name"`
-	AssumeRolePolicy *terraform.Literal `json:"assume_role_policy"`
+	Name                *string                  `cty:"name"`
+	AssumeRolePolicy    *terraformWriter.Literal `cty:"assume_role_policy"`
+	PermissionsBoundary *string                  `cty:"permissions_boundary"`
+	Tags                map[string]string        `cty:"tags"`
 }
 
 func (_ *IAMRole) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *IAMRole) error {
-	policy, err := t.AddFile("aws_iam_role", *e.Name, "policy", e.RolePolicyDocument)
+	policy, err := t.AddFileResource("aws_iam_role", *e.Name, "policy", e.RolePolicyDocument, false)
 	if err != nil {
 		return fmt.Errorf("error rendering RolePolicyDocument: %v", err)
 	}
@@ -203,27 +340,34 @@ func (_ *IAMRole) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *I
 	tf := &terraformIAMRole{
 		Name:             e.Name,
 		AssumeRolePolicy: policy,
+		Tags:             e.Tags,
+	}
+
+	if e.PermissionsBoundary != nil {
+		tf.PermissionsBoundary = e.PermissionsBoundary
 	}
 
 	if fi.StringValue(e.ExportWithID) != "" {
-		t.AddOutputVariable(*e.ExportWithID+"_role_arn", terraform.LiteralProperty("aws_iam_role", *e.Name, "arn"))
+		t.AddOutputVariable(*e.ExportWithID+"_role_arn", terraformWriter.LiteralProperty("aws_iam_role", *e.Name, "arn"))
 		t.AddOutputVariable(*e.ExportWithID+"_role_name", e.TerraformLink())
 	}
 
 	return t.RenderResource("aws_iam_role", *e.Name, tf)
 }
 
-func (e *IAMRole) TerraformLink() *terraform.Literal {
-	return terraform.LiteralProperty("aws_iam_role", *e.Name, "name")
+func (e *IAMRole) TerraformLink() *terraformWriter.Literal {
+	return terraformWriter.LiteralProperty("aws_iam_role", *e.Name, "name")
 }
 
 type cloudformationIAMRole struct {
 	RoleName                 *string `json:"RoleName"`
 	AssumeRolePolicyDocument map[string]interface{}
+	PermissionsBoundary      *string             `json:"PermissionsBoundary,omitempty"`
+	Tags                     []cloudformationTag `json:"Tags,omitempty"`
 }
 
 func (_ *IAMRole) RenderCloudformation(t *cloudformation.CloudformationTarget, a, e, changes *IAMRole) error {
-	jsonString, err := e.RolePolicyDocument.AsBytes()
+	jsonString, err := fi.ResourceAsBytes(e.RolePolicyDocument)
 	if err != nil {
 		return err
 	}
@@ -237,6 +381,11 @@ func (_ *IAMRole) RenderCloudformation(t *cloudformation.CloudformationTarget, a
 	cf := &cloudformationIAMRole{
 		RoleName:                 e.Name,
 		AssumeRolePolicyDocument: data,
+		Tags:                     buildCloudformationTags(e.Tags),
+	}
+
+	if e.PermissionsBoundary != nil {
+		cf.PermissionsBoundary = e.PermissionsBoundary
 	}
 
 	return t.RenderResource("AWS::IAM::Role", *e.Name, cf)

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,16 @@ limitations under the License.
 package cloudup
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
+	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/util/pkg/vfs"
 
 	kopsversion "k8s.io/kops"
@@ -37,11 +41,8 @@ import (
 // any time Run() is called in apply_cluster.go we will reach this function.
 // Please do all after-market logic here.
 //
-func PerformAssignments(c *kops.Cluster) error {
-	cloud, err := BuildCloud(c)
-	if err != nil {
-		return err
-	}
+func PerformAssignments(c *kops.Cluster, cloud fi.Cloud) error {
+	ctx := context.TODO()
 
 	// Topology support
 	// TODO Kris: Unsure if this needs to be here, or if the API conversion code will handle it
@@ -49,29 +50,61 @@ func PerformAssignments(c *kops.Cluster) error {
 		c.Spec.Topology = &kops.TopologySpec{Masters: kops.TopologyPublic, Nodes: kops.TopologyPublic}
 	}
 
-	// Currently only AWS uses NetworkCIDRs
-	setNetworkCIDR := cloud.ProviderID() == kops.CloudProviderAWS
+	if cloud == nil {
+		return fmt.Errorf("cloud cannot be nil")
+	}
+
+	if cloud.ProviderID() == kops.CloudProviderGCE {
+		if err := gce.PerformNetworkAssignments(ctx, c, cloud); err != nil {
+			return err
+		}
+	}
+
+	setNetworkCIDR := (cloud.ProviderID() == kops.CloudProviderAWS) || (cloud.ProviderID() == kops.CloudProviderAzure)
 	if setNetworkCIDR && c.Spec.NetworkCIDR == "" {
 		if c.SharedVPC() {
-			vpcInfo, err := cloud.FindVPCInfo(c.Spec.NetworkID)
-			if err != nil {
-				return err
+			var vpcInfo *fi.VPCInfo
+			var err error
+			if cloud.ProviderID() == kops.CloudProviderAzure {
+				if c.Spec.CloudConfig == nil || c.Spec.CloudConfig.Azure == nil || c.Spec.CloudConfig.Azure.ResourceGroupName == "" {
+					return fmt.Errorf("missing required --azure-resource-group-name when specifying Network ID")
+				}
+				vpcInfo, err = cloud.(azure.AzureCloud).FindVNetInfo(c.Spec.NetworkID, c.Spec.CloudConfig.Azure.ResourceGroupName)
+				if err != nil {
+					return err
+				}
+			} else {
+				vpcInfo, err = cloud.FindVPCInfo(c.Spec.NetworkID)
+				if err != nil {
+					return err
+				}
 			}
 			if vpcInfo == nil {
-				return fmt.Errorf("unable to find VPC ID %q", c.Spec.NetworkID)
+				return fmt.Errorf("unable to find Network ID %q", c.Spec.NetworkID)
 			}
 			c.Spec.NetworkCIDR = vpcInfo.CIDR
 			if c.Spec.NetworkCIDR == "" {
-				return fmt.Errorf("Unable to infer NetworkCIDR from VPC ID, please specify --network-cidr")
+				return fmt.Errorf("unable to infer NetworkCIDR from Network ID, please specify --network-cidr")
 			}
 		} else {
-			// TODO: Choose non-overlapping networking CIDRs for VPCs, using vpcInfo
-			c.Spec.NetworkCIDR = "172.20.0.0/16"
+			if cloud.ProviderID() == kops.CloudProviderAWS {
+				// TODO: Choose non-overlapping networking CIDRs for VPCs, using vpcInfo
+				c.Spec.NetworkCIDR = "172.20.0.0/16"
+			}
+		}
+
+		// Amazon VPC CNI uses the same network
+		if c.Spec.Networking != nil && c.Spec.Networking.AmazonVPC != nil {
+			c.Spec.NonMasqueradeCIDR = c.Spec.NetworkCIDR
 		}
 	}
 
 	if c.Spec.NonMasqueradeCIDR == "" {
-		c.Spec.NonMasqueradeCIDR = "100.64.0.0/10"
+		if c.Spec.Networking != nil && c.Spec.Networking.GCE != nil {
+			// Don't set NonMasqueradeCIDR
+		} else {
+			c.Spec.NonMasqueradeCIDR = "100.64.0.0/10"
+		}
 	}
 
 	// TODO: Unclear this should be here - it isn't too hard to change
@@ -79,19 +112,21 @@ func PerformAssignments(c *kops.Cluster) error {
 		c.Spec.MasterPublicName = "api." + c.ObjectMeta.Name
 	}
 
-	// We only assign subnet CIDRs on AWS
-	if cloud.ProviderID() == kops.CloudProviderAWS {
+	// We only assign subnet CIDRs on AWS, OpenStack, and Azure.
+	pd := cloud.ProviderID()
+	if pd == kops.CloudProviderAWS || pd == kops.CloudProviderOpenstack || pd == kops.CloudProviderAzure {
 		// TODO: Use vpcInfo
-		err = assignCIDRsToSubnets(c)
+		err := assignCIDRsToSubnets(c, cloud)
 		if err != nil {
 			return err
 		}
 	}
 
-	c.Spec.EgressProxy, err = assignProxy(c)
+	proxy, err := assignProxy(c)
 	if err != nil {
 		return err
 	}
+	c.Spec.EgressProxy = proxy
 
 	return ensureKubernetesVersion(c)
 }
@@ -108,12 +143,12 @@ func ensureKubernetesVersion(c *kops.Cluster) error {
 			kubernetesVersion := kops.RecommendedKubernetesVersion(channel, kopsversion.Version)
 			if kubernetesVersion != nil {
 				c.Spec.KubernetesVersion = kubernetesVersion.String()
-				glog.Infof("Using KubernetesVersion %q from channel %q", c.Spec.KubernetesVersion, c.Spec.Channel)
+				klog.Infof("Using KubernetesVersion %q from channel %q", c.Spec.KubernetesVersion, c.Spec.Channel)
 			} else {
-				glog.Warningf("Cannot determine recommended kubernetes version from channel %q", c.Spec.Channel)
+				klog.Warningf("Cannot determine recommended kubernetes version from channel %q", c.Spec.Channel)
 			}
 		} else {
-			glog.Warningf("Channel is not set; cannot determine KubernetesVersion from channel")
+			klog.Warningf("Channel is not set; cannot determine KubernetesVersion from channel")
 		}
 	}
 
@@ -122,7 +157,7 @@ func ensureKubernetesVersion(c *kops.Cluster) error {
 		if err != nil {
 			return err
 		}
-		glog.Infof("Using kubernetes latest stable version: %s", latestVersion)
+		klog.Infof("Using kubernetes latest stable version: %s", latestVersion)
 		c.Spec.KubernetesVersion = latestVersion
 	}
 	return nil
@@ -133,7 +168,7 @@ func ensureKubernetesVersion(c *kops.Cluster) error {
 // This shouldn't be used any more; we prefer reading the stable channel
 func FindLatestKubernetesVersion() (string, error) {
 	stableURL := "https://storage.googleapis.com/kubernetes-release/release/stable.txt"
-	glog.Warningf("Loading latest kubernetes version from %q", stableURL)
+	klog.Warningf("Loading latest kubernetes version from %q", stableURL)
 	b, err := vfs.Context.ReadFile(stableURL)
 	if err != nil {
 		return "", fmt.Errorf("KubernetesVersion not specified, and unable to download latest version from %q: %v", stableURL, err)
@@ -143,7 +178,6 @@ func FindLatestKubernetesVersion() (string, error) {
 }
 
 func assignProxy(cluster *kops.Cluster) (*kops.EgressProxySpec, error) {
-
 	egressProxy := cluster.Spec.EgressProxy
 	// Add default no_proxy values if we are using a http proxy
 	if egressProxy != nil {
@@ -194,13 +228,13 @@ func assignProxy(cluster *kops.Cluster) (*kops.EgressProxySpec, error) {
 				egressSlice = append(egressSlice, cluster.Spec.NetworkCIDR)
 			}
 		} else {
-			glog.Warningf("No NetworkCIDR defined (yet), not adding to egressProxy.excludes")
+			klog.Warningf("No NetworkCIDR defined (yet), not adding to egressProxy.excludes")
 		}
 
 		egressProxy.ProxyExcludes = strings.Join(egressSlice, ",")
-		glog.V(8).Infof("Completed setting up Proxy excludes as follows: %q", egressProxy.ProxyExcludes)
+		klog.V(8).Infof("Completed setting up Proxy excludes as follows: %q", egressProxy.ProxyExcludes)
 	} else {
-		glog.V(8).Info("Not setting up Proxy Excludes")
+		klog.V(8).Info("Not setting up Proxy Excludes")
 	}
 
 	return egressProxy, nil

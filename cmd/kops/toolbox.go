@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,33 +21,20 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/kops/cmd/kops/util"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubectl/pkg/util/i18n"
 )
 
-var (
-	toolbox_long = templates.LongDesc(i18n.T(`
-	Misc infrequently used commands.`))
-
-	toolbox_example = templates.Examples(i18n.T(`
-	# Dump cluster information
-	kops toolbox dump --name k8s-cluster.example.com
-	`))
-
-	toolbox_short = i18n.T(`Misc infrequently used commands.`)
-)
+var toolboxShort = i18n.T(`Miscellaneous, infrequently used commands.`)
 
 func NewCmdToolbox(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "toolbox",
-		Short:   toolbox_short,
-		Long:    toolbox_long,
-		Example: toolbox_example,
+		Use:   "toolbox",
+		Short: toolboxShort,
 	}
 
-	cmd.AddCommand(NewCmdToolboxConvertImported(f, out))
 	cmd.AddCommand(NewCmdToolboxDump(f, out))
 	cmd.AddCommand(NewCmdToolboxTemplate(f, out))
+	cmd.AddCommand(NewCmdToolboxInstanceSelector(f, out))
 
 	return cmd
 }

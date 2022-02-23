@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ func (v *Volume) String() string {
 
 type VolumeInfo struct {
 	Description string
-	//MasterID    int
+	// MasterID    int
 	// TODO: Maybe the events cluster can just be a PetSet - do we need it for boot?
 	EtcdClusters []*etcd.EtcdClusterSpec
 }

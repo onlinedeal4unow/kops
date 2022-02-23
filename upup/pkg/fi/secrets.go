@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ type SecretStore interface {
 	// Secret returns a secret.  Returns an error if not found
 	Secret(id string) (*Secret, error)
 	// DeleteSecret deletes the specified secret
-	DeleteSecret(item *KeystoreItem) error
+	DeleteSecret(id string) error
 	// FindSecret finds a secret, if exists.  Returns nil,nil if not found
 	FindSecret(id string) (*Secret, error)
 	// GetOrCreateSecret creates a secret

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,21 +21,29 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=VPC
+// +kops:fitask
 type VPC struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
-	ID                 *string
-	CIDR               *string
+	ID   *string
+	CIDR *string
+
+	// AmazonIPv6 is used only for Terraform rendering.
+	// Direct and CloudFormation rendering is handled via the VPCAmazonIPv6CIDRBlock task
+	AmazonIPv6 *bool
+	IPv6CIDR   *string
+
 	EnableDNSHostnames *bool
 	EnableDNSSupport   *bool
 
@@ -43,9 +51,17 @@ type VPC struct {
 	Shared *bool
 
 	Tags map[string]string
+
+	// AssociateExtraCIDRBlocks contains a list of cidr blocks that should be
+	// associated with the VPC; any other CIDR blocks should be disassociated.
+	// The associations themselves are created through the VPCCIDRBlock awstask.
+	AssociateExtraCIDRBlocks []string
 }
 
-var _ fi.CompareWithID = &VPC{}
+var (
+	_ fi.CompareWithID     = &VPC{}
+	_ fi.ProducesDeletions = &VPC{}
+)
 
 func (e *VPC) CompareWithID() *string {
 	return e.ID
@@ -75,13 +91,36 @@ func (e *VPC) Find(c *fi.Context) (*VPC, error) {
 	}
 	vpc := response.Vpcs[0]
 	actual := &VPC{
-		ID:   vpc.VpcId,
-		CIDR: vpc.CidrBlock,
-		Name: findNameTag(vpc.Tags),
-		Tags: intersectTags(vpc.Tags, e.Tags),
+		ID:         vpc.VpcId,
+		CIDR:       vpc.CidrBlock,
+		AmazonIPv6: aws.Bool(false),
+		Name:       findNameTag(vpc.Tags),
+		Tags:       intersectTags(vpc.Tags, e.Tags),
 	}
 
-	glog.V(4).Infof("found matching VPC %v", actual)
+	klog.V(4).Infof("found matching VPC %v", actual)
+
+	for _, association := range vpc.Ipv6CidrBlockAssociationSet {
+		if association == nil || association.Ipv6CidrBlockState == nil {
+			continue
+		}
+
+		state := aws.StringValue(association.Ipv6CidrBlockState.State)
+		if state != ec2.VpcCidrBlockStateCodeAssociated && state != ec2.VpcCidrBlockStateCodeAssociating {
+			continue
+		}
+
+		pool := aws.StringValue(association.Ipv6Pool)
+		if pool == "Amazon" {
+			actual.AmazonIPv6 = aws.Bool(true)
+			actual.IPv6CIDR = association.Ipv6CidrBlock
+			e.IPv6CIDR = association.Ipv6CidrBlock
+			break
+		} else if actual.IPv6CIDR == nil {
+			actual.IPv6CIDR = association.Ipv6CidrBlock
+			e.IPv6CIDR = association.Ipv6CidrBlock
+		}
+	}
 
 	if actual.ID != nil {
 		request := &ec2.DescribeVpcAttributeInput{VpcId: actual.ID, Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport)}
@@ -108,6 +147,7 @@ func (e *VPC) Find(c *fi.Context) (*VPC, error) {
 	}
 	actual.Lifecycle = e.Lifecycle
 	actual.Name = e.Name // Name is part of Tags
+	actual.AssociateExtraCIDRBlocks = e.AssociateExtraCIDRBlocks
 
 	return actual, nil
 }
@@ -122,7 +162,7 @@ func (s *VPC) CheckChanges(a, e, changes *VPC) error {
 	if a != nil {
 		if changes.CIDR != nil {
 			// TODO: Do we want to destroy & recreate the VPC?
-			return fi.CannotChangeField("CIDR")
+			return fi.FieldIsImmutable(e.CIDR, a.CIDR, field.NewPath("CIDR"))
 		}
 	}
 	return nil
@@ -142,7 +182,7 @@ func (_ *VPC) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *VPC) error {
 
 		if changes != nil && changes.EnableDNSSupport != nil {
 			if featureflag.VPCSkipEnableDNSSupport.Enabled() {
-				glog.Warningf("VPC did not have EnableDNSSupport=true, but ignoring because of VPCSkipEnableDNSSupport feature-flag")
+				klog.Warningf("VPC did not have EnableDNSSupport=true, but ignoring because of VPCSkipEnableDNSSupport feature-flag")
 			} else {
 				// TODO: We could easily just allow kops to fix this...
 				return fmt.Errorf("VPC with id %q was set to be shared, but did not have EnableDNSSupport=true.", fi.StringValue(e.ID))
@@ -151,10 +191,11 @@ func (_ *VPC) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *VPC) error {
 	}
 
 	if a == nil {
-		glog.V(2).Infof("Creating VPC with CIDR: %q", *e.CIDR)
+		klog.V(2).Infof("Creating VPC with CIDR: %q", *e.CIDR)
 
 		request := &ec2.CreateVpcInput{
-			CidrBlock: e.CIDR,
+			CidrBlock:         e.CIDR,
+			TagSpecifications: awsup.EC2TagSpecification(ec2.ResourceTypeVpc, e.Tags),
 		}
 
 		response, err := t.Cloud.EC2().CreateVpc(request)
@@ -192,11 +233,59 @@ func (_ *VPC) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *VPC) error {
 	return t.AddAWSTags(*e.ID, e.Tags)
 }
 
+func (e *VPC) FindDeletions(c *fi.Context) ([]fi.Deletion, error) {
+	if fi.IsNilOrEmpty(e.ID) || fi.BoolValue(e.Shared) {
+		return nil, nil
+	}
+
+	var removals []fi.Deletion
+	request := &ec2.DescribeVpcsInput{
+		VpcIds: []*string{e.ID},
+	}
+	cloud := c.Cloud.(awsup.AWSCloud)
+	response, err := cloud.EC2().DescribeVpcs(request)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil || len(response.Vpcs) == 0 {
+		return nil, nil
+	}
+
+	if len(response.Vpcs) != 1 {
+		return nil, fmt.Errorf("found multiple VPCs matching tags")
+	}
+	vpc := response.Vpcs[0]
+	for _, association := range vpc.CidrBlockAssociationSet {
+		// We'll only delete CIDR associations that are not the primary association
+		// and that have a state of "associated"
+		if fi.StringValue(association.CidrBlock) == fi.StringValue(vpc.CidrBlock) ||
+			association.CidrBlockState != nil && fi.StringValue(association.CidrBlockState.State) != ec2.VpcCidrBlockStateCodeAssociated {
+			continue
+		}
+		match := false
+		for _, cidr := range e.AssociateExtraCIDRBlocks {
+			if fi.StringValue(association.CidrBlock) == cidr {
+				match = true
+				break
+			}
+		}
+		if !match {
+			removals = append(removals, &deleteVPCCIDRBlock{
+				vpcID:         vpc.VpcId,
+				cidrBlock:     association.CidrBlock,
+				associationID: association.AssociationId,
+			})
+		}
+	}
+	return removals, nil
+}
+
 type terraformVPC struct {
-	CIDR               *string           `json:"cidr_block,omitempty"`
-	EnableDNSHostnames *bool             `json:"enable_dns_hostnames,omitempty"`
-	EnableDNSSupport   *bool             `json:"enable_dns_support,omitempty"`
-	Tags               map[string]string `json:"tags,omitempty"`
+	CIDR               *string           `cty:"cidr_block"`
+	EnableDNSHostnames *bool             `cty:"enable_dns_hostnames"`
+	EnableDNSSupport   *bool             `cty:"enable_dns_support"`
+	AmazonIPv6         *bool             `cty:"assign_generated_ipv6_cidr_block"`
+	Tags               map[string]string `cty:"tags"`
 }
 
 func (_ *VPC) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *VPC) error {
@@ -211,28 +300,34 @@ func (_ *VPC) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *VPC) 
 		return nil
 	}
 
+	if err := t.AddOutputVariable("vpc_cidr_block", terraformWriter.LiteralProperty("aws_vpc", *e.Name, "cidr_block")); err != nil {
+		// TODO: Should we try to output vpc_cidr_block for shared vpcs?
+		return err
+	}
+
 	tf := &terraformVPC{
 		CIDR:               e.CIDR,
 		Tags:               e.Tags,
 		EnableDNSHostnames: e.EnableDNSHostnames,
 		EnableDNSSupport:   e.EnableDNSSupport,
+		AmazonIPv6:         e.AmazonIPv6,
 	}
 
 	return t.RenderResource("aws_vpc", *e.Name, tf)
 }
 
-func (e *VPC) TerraformLink() *terraform.Literal {
+func (e *VPC) TerraformLink() *terraformWriter.Literal {
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		if e.ID == nil {
-			glog.Fatalf("ID must be set, if VPC is shared: %s", e)
+			klog.Fatalf("ID must be set, if VPC is shared: %s", e)
 		}
 
-		glog.V(4).Infof("reusing existing VPC with id %q", *e.ID)
-		return terraform.LiteralFromStringValue(*e.ID)
+		klog.V(4).Infof("reusing existing VPC with id %q", *e.ID)
+		return terraformWriter.LiteralFromStringValue(*e.ID)
 	}
 
-	return terraform.LiteralProperty("aws_vpc", *e.Name, "id")
+	return terraformWriter.LiteralProperty("aws_vpc", *e.Name, "id")
 }
 
 type cloudformationVPC struct {
@@ -264,12 +359,40 @@ func (e *VPC) CloudformationLink() *cloudformation.Literal {
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		if e.ID == nil {
-			glog.Fatalf("ID must be set, if VPC is shared: %s", e)
+			klog.Fatalf("ID must be set, if VPC is shared: %s", e)
 		}
 
-		glog.V(4).Infof("reusing existing VPC with id %q", *e.ID)
+		klog.V(4).Infof("reusing existing VPC with id %q", *e.ID)
 		return cloudformation.LiteralString(*e.ID)
 	}
 
 	return cloudformation.Ref("AWS::EC2::VPC", *e.Name)
+}
+
+type deleteVPCCIDRBlock struct {
+	vpcID         *string
+	cidrBlock     *string
+	associationID *string
+}
+
+var _ fi.Deletion = &deleteVPCCIDRBlock{}
+
+func (d *deleteVPCCIDRBlock) Delete(t fi.Target) error {
+	awsTarget, ok := t.(*awsup.AWSAPITarget)
+	if !ok {
+		return fmt.Errorf("unexpected target type for deletion: %T", t)
+	}
+	request := &ec2.DisassociateVpcCidrBlockInput{
+		AssociationId: d.associationID,
+	}
+	_, err := awsTarget.Cloud.EC2().DisassociateVpcCidrBlock(request)
+	return err
+}
+
+func (d *deleteVPCCIDRBlock) TaskName() string {
+	return "VPCCIDRBlock"
+}
+
+func (d *deleteVPCCIDRBlock) Item() string {
+	return fmt.Sprintf("%v: cidr=%v", *d.vpcID, *d.cidrBlock)
 }

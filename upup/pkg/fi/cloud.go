@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,28 +17,42 @@ limitations under the License.
 package fi
 
 import (
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
 )
 
 type Cloud interface {
 	ProviderID() kops.CloudProviderID
-
 	DNS() (dnsprovider.Interface, error)
 
-	// FindVPCInfo looks up the specified VPC by id, returning info if found, otherwise (nil, nil)
+	// FindVPCInfo looks up the specified VPC by id, returning info if found, otherwise (nil, nil).
 	FindVPCInfo(id string) (*VPCInfo, error)
 
-	// DeleteInstance deletes a cloud instance
-	DeleteInstance(instance *cloudinstances.CloudInstanceGroupMember) error
+	// DeleteInstance deletes a cloud instance.
+	DeleteInstance(instance *cloudinstances.CloudInstance) error
 
-	// DeleteGroup deletes the cloud resources that make up a CloudInstanceGroup, including the instances
+	// // DeregisterInstance drains a cloud instance and loadbalancers.
+	DeregisterInstance(instance *cloudinstances.CloudInstance) error
+
+	// DeleteGroup deletes the cloud resources that make up a CloudInstanceGroup, including the instances.
 	DeleteGroup(group *cloudinstances.CloudInstanceGroup) error
 
-	// GetCloudGroups returns a map of cloud instances that back a kops cluster
+	// DetachInstance causes a cloud instance to no longer be counted against the group's size limits.
+	DetachInstance(instance *cloudinstances.CloudInstance) error
+
+	// GetCloudGroups returns a map of cloud instances that back a kops cluster.
+	// Detached instances must be returned in the NeedUpdate slice.
 	GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error)
+
+	// Region returns the cloud region bound to the cloud instance.
+	// If the region concept does not apply, returns "".
+	Region() string
+
+	// FindClusterStatus discovers the status of the cluster, by inspecting the cloud objects
+	FindClusterStatus(cluster *kops.Cluster) (*kops.ClusterStatus, error)
+	GetApiIngressStatus(cluster *kops.Cluster) ([]ApiIngressStatus, error)
 }
 
 type VPCInfo struct {
@@ -55,151 +69,16 @@ type SubnetInfo struct {
 	CIDR string
 }
 
-// zonesToCloud allows us to infer from certain well-known zones to a cloud
-// Note it is safe to "overmap" zones that don't exist: we'll check later if the zones actually exist
-var zonesToCloud = map[string]kops.CloudProviderID{
-	"us-east-1a": kops.CloudProviderAWS,
-	"us-east-1b": kops.CloudProviderAWS,
-	"us-east-1c": kops.CloudProviderAWS,
-	"us-east-1d": kops.CloudProviderAWS,
-	"us-east-1e": kops.CloudProviderAWS,
+// ApiIngressStatus represents the status of an ingress point:
+// traffic intended for the service should be sent to an ingress point.
+type ApiIngressStatus struct {
+	// IP is set for load-balancer ingress points that are IP based
+	// (typically GCE or OpenStack load-balancers)
+	// +optional
+	IP string `json:"ip,omitempty" protobuf:"bytes,1,opt,name=ip"`
 
-	"us-east-2a": kops.CloudProviderAWS,
-	"us-east-2b": kops.CloudProviderAWS,
-	"us-east-2c": kops.CloudProviderAWS,
-	"us-east-2d": kops.CloudProviderAWS,
-	"us-east-2e": kops.CloudProviderAWS,
-
-	"us-west-1a": kops.CloudProviderAWS,
-	"us-west-1b": kops.CloudProviderAWS,
-	"us-west-1c": kops.CloudProviderAWS,
-	"us-west-1d": kops.CloudProviderAWS,
-	"us-west-1e": kops.CloudProviderAWS,
-
-	"us-west-2a": kops.CloudProviderAWS,
-	"us-west-2b": kops.CloudProviderAWS,
-	"us-west-2c": kops.CloudProviderAWS,
-	"us-west-2d": kops.CloudProviderAWS,
-	"us-west-2e": kops.CloudProviderAWS,
-
-	"ca-central-1a": kops.CloudProviderAWS,
-	"ca-central-1b": kops.CloudProviderAWS,
-
-	"eu-west-1a": kops.CloudProviderAWS,
-	"eu-west-1b": kops.CloudProviderAWS,
-	"eu-west-1c": kops.CloudProviderAWS,
-	"eu-west-1d": kops.CloudProviderAWS,
-	"eu-west-1e": kops.CloudProviderAWS,
-	"eu-west-2a": kops.CloudProviderAWS,
-	"eu-west-2b": kops.CloudProviderAWS,
-
-	"eu-central-1a": kops.CloudProviderAWS,
-	"eu-central-1b": kops.CloudProviderAWS,
-	"eu-central-1c": kops.CloudProviderAWS,
-	"eu-central-1d": kops.CloudProviderAWS,
-	"eu-central-1e": kops.CloudProviderAWS,
-
-	"ap-south-1a": kops.CloudProviderAWS,
-	"ap-south-1b": kops.CloudProviderAWS,
-	"ap-south-1c": kops.CloudProviderAWS,
-	"ap-south-1d": kops.CloudProviderAWS,
-	"ap-south-1e": kops.CloudProviderAWS,
-
-	"ap-southeast-1a": kops.CloudProviderAWS,
-	"ap-southeast-1b": kops.CloudProviderAWS,
-	"ap-southeast-1c": kops.CloudProviderAWS,
-	"ap-southeast-1d": kops.CloudProviderAWS,
-	"ap-southeast-1e": kops.CloudProviderAWS,
-
-	"ap-southeast-2a": kops.CloudProviderAWS,
-	"ap-southeast-2b": kops.CloudProviderAWS,
-	"ap-southeast-2c": kops.CloudProviderAWS,
-	"ap-southeast-2d": kops.CloudProviderAWS,
-	"ap-southeast-2e": kops.CloudProviderAWS,
-
-	"ap-northeast-1a": kops.CloudProviderAWS,
-	"ap-northeast-1b": kops.CloudProviderAWS,
-	"ap-northeast-1c": kops.CloudProviderAWS,
-	"ap-northeast-1d": kops.CloudProviderAWS,
-	"ap-northeast-1e": kops.CloudProviderAWS,
-
-	"ap-northeast-2a": kops.CloudProviderAWS,
-	"ap-northeast-2b": kops.CloudProviderAWS,
-	"ap-northeast-2c": kops.CloudProviderAWS,
-	"ap-northeast-2d": kops.CloudProviderAWS,
-	"ap-northeast-2e": kops.CloudProviderAWS,
-
-	"sa-east-1a": kops.CloudProviderAWS,
-	"sa-east-1b": kops.CloudProviderAWS,
-	"sa-east-1c": kops.CloudProviderAWS,
-	"sa-east-1d": kops.CloudProviderAWS,
-	"sa-east-1e": kops.CloudProviderAWS,
-
-	"cn-north-1a": kops.CloudProviderAWS,
-	"cn-north-1b": kops.CloudProviderAWS,
-
-	"us-gov-west-1a": kops.CloudProviderAWS,
-	"us-gov-west-1b": kops.CloudProviderAWS,
-
-	// GCE
-	"asia-east1-a": kops.CloudProviderGCE,
-	"asia-east1-b": kops.CloudProviderGCE,
-	"asia-east1-c": kops.CloudProviderGCE,
-	"asia-east1-d": kops.CloudProviderGCE,
-
-	"asia-northeast1-a": kops.CloudProviderGCE,
-	"asia-northeast1-b": kops.CloudProviderGCE,
-	"asia-northeast1-c": kops.CloudProviderGCE,
-	"asia-northeast1-d": kops.CloudProviderGCE,
-
-	"europe-west1-a": kops.CloudProviderGCE,
-	"europe-west1-b": kops.CloudProviderGCE,
-	"europe-west1-c": kops.CloudProviderGCE,
-	"europe-west1-d": kops.CloudProviderGCE,
-	"europe-west1-e": kops.CloudProviderGCE,
-
-	"us-central1-a": kops.CloudProviderGCE,
-	"us-central1-b": kops.CloudProviderGCE,
-	"us-central1-c": kops.CloudProviderGCE,
-	"us-central1-d": kops.CloudProviderGCE,
-	"us-central1-e": kops.CloudProviderGCE,
-	"us-central1-f": kops.CloudProviderGCE,
-	"us-central1-g": kops.CloudProviderGCE,
-	"us-central1-h": kops.CloudProviderGCE,
-
-	"us-east1-a": kops.CloudProviderGCE,
-	"us-east1-b": kops.CloudProviderGCE,
-	"us-east1-c": kops.CloudProviderGCE,
-	"us-east1-d": kops.CloudProviderGCE,
-
-	"us-west1-a": kops.CloudProviderGCE,
-	"us-west1-b": kops.CloudProviderGCE,
-	"us-west1-c": kops.CloudProviderGCE,
-	"us-west1-d": kops.CloudProviderGCE,
-
-	"nyc1": kops.CloudProviderDO,
-	"nyc2": kops.CloudProviderDO,
-	"nyc3": kops.CloudProviderDO,
-
-	"sfo1": kops.CloudProviderDO,
-	"sfo2": kops.CloudProviderDO,
-
-	"ams2": kops.CloudProviderDO,
-	"ams3": kops.CloudProviderDO,
-
-	"tor1": kops.CloudProviderDO,
-
-	"sgp1": kops.CloudProviderDO,
-
-	"lon1": kops.CloudProviderDO,
-
-	"fra1": kops.CloudProviderDO,
-
-	"blr1": kops.CloudProviderDO,
-}
-
-// GuessCloudForZone tries to infer the cloudprovider from the zone name
-func GuessCloudForZone(zone string) (kops.CloudProviderID, bool) {
-	c, found := zonesToCloud[zone]
-	return c, found
+	// Hostname is set for load-balancer ingress points that are DNS based
+	// (typically AWS load-balancers)
+	// +optional
+	Hostname string `json:"hostname,omitempty" protobuf:"bytes,2,opt,name=hostname"`
 }

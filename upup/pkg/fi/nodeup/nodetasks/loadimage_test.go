@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,5 +37,4 @@ func TestLoadImageTask_Deps(t *testing.T) {
 	if !reflect.DeepEqual(expected, deps) {
 		t.Fatalf("unexpected deps.  expected=%v, actual=%v", expected, deps)
 	}
-
 }

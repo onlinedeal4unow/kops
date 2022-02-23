@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,15 +17,14 @@ limitations under the License.
 package dotasks
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/digitalocean/godo"
-	"github.com/digitalocean/godo/context"
-
-	"k8s.io/kops/pkg/resources/digitalocean"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 )
 
 type fakeStorageClient struct {
@@ -69,13 +68,6 @@ func (f fakeStorageClient) CreateSnapshot(ctx context.Context, req *godo.Snapsho
 
 func (f fakeStorageClient) DeleteSnapshot(ctx context.Context, id string) (*godo.Response, error) {
 	return f.deleteSnapshotFn(ctx, id)
-}
-
-func newCloud(client *godo.Client) *digitalocean.Cloud {
-	return &digitalocean.Cloud{
-		Client: client,
-		Region: "nyc1",
-	}
 }
 
 func newContext(cloud fi.Cloud) *fi.Context {
@@ -156,7 +148,7 @@ func Test_Find(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			cloud := newCloud(godo.NewClient(nil))
+			cloud := do.BuildMockDOCloud("nyc1")
 			cloud.Client.Storage = tc.storage
 			ctx := newContext(cloud)
 

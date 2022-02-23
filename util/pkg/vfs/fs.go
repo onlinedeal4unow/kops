@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,14 +17,16 @@ limitations under the License.
 package vfs
 
 import (
+	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path"
 	"sync"
+	"syscall"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
+	"k8s.io/kops/pkg/try"
 	"k8s.io/kops/util/pkg/hashing"
 )
 
@@ -32,8 +34,10 @@ type FSPath struct {
 	location string
 }
 
-var _ Path = &FSPath{}
-var _ HasHash = &FSPath{}
+var (
+	_ Path    = &FSPath{}
+	_ HasHash = &FSPath{}
+)
 
 func NewFSPath(location string) *FSPath {
 	return &FSPath{location: location}
@@ -46,14 +50,14 @@ func (p *FSPath) Join(relativePath ...string) Path {
 	return &FSPath{location: joined}
 }
 
-func (p *FSPath) WriteFile(data []byte, acl ACL) error {
+func (p *FSPath) WriteFile(data io.ReadSeeker, acl ACL) error {
 	dir := path.Dir(p.location)
-	err := os.MkdirAll(dir, 0755)
+	err := os.MkdirAll(dir, 0o755)
 	if err != nil {
 		return fmt.Errorf("error creating directories %q: %v", dir, err)
 	}
 
-	f, err := ioutil.TempFile(dir, "tmp")
+	f, err := os.CreateTemp(dir, "tmp")
 	if err != nil {
 		return fmt.Errorf("error creating temp file in %q: %v", dir, err)
 	}
@@ -61,10 +65,7 @@ func (p *FSPath) WriteFile(data []byte, acl ACL) error {
 	// Note from here on in we have to close f and delete or rename the temp file
 	tempfile := f.Name()
 
-	n, err := f.Write(data)
-	if err == nil && n < len(data) {
-		err = io.ErrShortWrite
-	}
+	_, err = io.Copy(f, data)
 
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
@@ -83,7 +84,7 @@ func (p *FSPath) WriteFile(data []byte, acl ACL) error {
 
 	// Something went wrong; try to remove the temp file
 	if removeErr := os.Remove(tempfile); removeErr != nil {
-		glog.Warningf("unable to remove temp file %q: %v", tempfile, removeErr)
+		klog.Warningf("unable to remove temp file %q: %v", tempfile, removeErr)
 	}
 
 	return err
@@ -95,7 +96,7 @@ func (p *FSPath) WriteFile(data []byte, acl ACL) error {
 // TODO: should we take a file lock or equivalent here?  Can we use RENAME_NOREPLACE ?
 var createFileLock sync.Mutex
 
-func (p *FSPath) CreateFile(data []byte, acl ACL) error {
+func (p *FSPath) CreateFile(data io.ReadSeeker, acl ACL) error {
 	createFileLock.Lock()
 	defer createFileLock.Unlock()
 
@@ -112,12 +113,28 @@ func (p *FSPath) CreateFile(data []byte, acl ACL) error {
 	return p.WriteFile(data, acl)
 }
 
+// ReadFile implements Path::ReadFile
 func (p *FSPath) ReadFile() ([]byte, error) {
-	return ioutil.ReadFile(p.location)
+	file, err := os.ReadFile(p.location)
+	if errors.Is(err, syscall.ENOENT) {
+		err = os.ErrNotExist
+	}
+	return file, err
+}
+
+// WriteTo implements io.WriterTo
+func (p *FSPath) WriteTo(out io.Writer) (int64, error) {
+	f, err := os.Open(p.location)
+	if err != nil {
+		return 0, err
+	}
+	defer try.CloseFile(f)
+
+	return io.Copy(out, f)
 }
 
 func (p *FSPath) ReadDir() ([]Path, error) {
-	files, err := ioutil.ReadDir(p.location)
+	files, err := os.ReadDir(p.location)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, err
@@ -140,19 +157,22 @@ func (p *FSPath) ReadTree() ([]Path, error) {
 	return paths, nil
 }
 
+// readTree recursively finds files and adds them to dest
+// It excludes directories.
 func readTree(base string, dest *[]Path) error {
-	files, err := ioutil.ReadDir(base)
+	files, err := os.ReadDir(base)
 	if err != nil {
 		return err
 	}
 	for _, f := range files {
 		p := path.Join(base, f.Name())
-		*dest = append(*dest, NewFSPath(p))
 		if f.IsDir() {
 			err = readTree(p, dest)
 			if err != nil {
 				return err
 			}
+		} else {
+			*dest = append(*dest, NewFSPath(p))
 		}
 	}
 	return nil
@@ -174,12 +194,16 @@ func (p *FSPath) Remove() error {
 	return os.Remove(p.location)
 }
 
+func (p *FSPath) RemoveAllVersions() error {
+	return p.Remove()
+}
+
 func (p *FSPath) PreferredHash() (*hashing.Hash, error) {
 	return p.Hash(hashing.HashAlgorithmSHA256)
 }
 
 func (p *FSPath) Hash(a hashing.HashAlgorithm) (*hashing.Hash, error) {
-	glog.V(2).Infof("hashing file %q", p.location)
+	klog.V(2).Infof("hashing file %q", p.location)
 
 	return a.HashFile(p.location)
 }

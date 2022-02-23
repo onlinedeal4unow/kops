@@ -1,46 +1,60 @@
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: Cluster
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   name: ha.example.com
 spec:
   api:
     dns: {}
   authorization:
-    alwaysAllow: {}
+    rbac: {}
   channel: stable
   cloudProvider: aws
   configBase: memfs://tests/ha.example.com
   etcdClusters:
-  - etcdMembers:
-    - instanceGroup: master-us-test-1a
+  - cpuRequest: 200m
+    etcdMembers:
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1a
       name: a
-    - instanceGroup: master-us-test-1b
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1b
       name: b
-    - instanceGroup: master-us-test-1c
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1c
       name: c
+    memoryRequest: 100Mi
     name: main
-  - etcdMembers:
-    - instanceGroup: master-us-test-1a
+  - cpuRequest: 100m
+    etcdMembers:
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1a
       name: a
-    - instanceGroup: master-us-test-1b
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1b
       name: b
-    - instanceGroup: master-us-test-1c
+    - encryptedVolume: true
+      instanceGroup: master-us-test-1c
       name: c
+    memoryRequest: 100Mi
     name: events
   iam:
     allowContainerRegistry: true
     legacy: false
+  kubelet:
+    anonymousAuth: false
   kubernetesApiAccess:
   - 0.0.0.0/0
-  kubernetesVersion: v1.6.0-alpha.3
+  - ::/0
+  kubernetesVersion: v1.21.0
   masterPublicName: api.ha.example.com
   networkCIDR: 172.20.0.0/16
   networking:
-    kubenet: {}
+    cni: {}
   nonMasqueradeCIDR: 100.64.0.0/10
   sshAccess:
   - 0.0.0.0/0
+  - ::/0
   subnets:
   - cidr: 172.20.32.0/19
     name: us-test-1a
@@ -62,16 +76,17 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha.example.com
   name: master-us-test-1a
 spec:
-  image: kope.io/k8s-1.5-debian-jessie-amd64-hvm-ebs-2017-07-28
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
   machineType: m3.medium
+  manager: CloudGroup
   maxSize: 1
   minSize: 1
   nodeLabels:
@@ -82,16 +97,17 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha.example.com
   name: master-us-test-1b
 spec:
-  image: kope.io/k8s-1.5-debian-jessie-amd64-hvm-ebs-2017-07-28
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
   machineType: m3.medium
+  manager: CloudGroup
   maxSize: 1
   minSize: 1
   nodeLabels:
@@ -102,16 +118,17 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha.example.com
   name: master-us-test-1c
 spec:
-  image: kope.io/k8s-1.5-debian-jessie-amd64-hvm-ebs-2017-07-28
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
   machineType: m3.medium
+  manager: CloudGroup
   maxSize: 1
   minSize: 1
   nodeLabels:
@@ -122,22 +139,63 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  creationTimestamp: 2017-01-01T00:00:00Z
+  creationTimestamp: "2017-01-01T00:00:00Z"
   labels:
     kops.k8s.io/cluster: ha.example.com
-  name: nodes
+  name: nodes-us-test-1a
 spec:
-  image: kope.io/k8s-1.5-debian-jessie-amd64-hvm-ebs-2017-07-28
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
   machineType: t2.medium
-  maxSize: 2
-  minSize: 2
+  manager: CloudGroup
+  maxSize: 1
+  minSize: 1
   nodeLabels:
-    kops.k8s.io/instancegroup: nodes
+    kops.k8s.io/instancegroup: nodes-us-test-1a
   role: Node
   subnets:
   - us-test-1a
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  creationTimestamp: "2017-01-01T00:00:00Z"
+  labels:
+    kops.k8s.io/cluster: ha.example.com
+  name: nodes-us-test-1b
+spec:
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
+  machineType: t2.medium
+  manager: CloudGroup
+  maxSize: 1
+  minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test-1b
+  role: Node
+  subnets:
   - us-test-1b
+
+---
+
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  creationTimestamp: "2017-01-01T00:00:00Z"
+  labels:
+    kops.k8s.io/cluster: ha.example.com
+  name: nodes-us-test-1c
+spec:
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20220131
+  machineType: t2.medium
+  manager: CloudGroup
+  maxSize: 1
+  minSize: 1
+  nodeLabels:
+    kops.k8s.io/instancegroup: nodes-us-test-1c
+  role: Node
+  subnets:
   - us-test-1c

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package mockroute53
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/route53"
@@ -32,6 +33,10 @@ type zoneInfo struct {
 }
 
 type MockRoute53 struct {
+	// Mock out interface
+	route53iface.Route53API
+
+	mutex sync.Mutex
 	Zones []*zoneInfo
 }
 
@@ -51,6 +56,9 @@ func (m *MockRoute53) findZone(hostedZoneId string) *zoneInfo {
 }
 
 func (m *MockRoute53) MockCreateZone(z *route53.HostedZone, vpcs []*route53.VPC) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	zi := &zoneInfo{
 		ID:         aws.StringValue(z.Id),
 		hostedZone: z,

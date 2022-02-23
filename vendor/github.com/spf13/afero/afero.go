@@ -77,7 +77,7 @@ type Fs interface {
 	// happens.
 	Remove(name string) error
 
-	// RemoveAll removes a directory path and all any children it contains. It
+	// RemoveAll removes a directory path and any children it contains. It
 	// does not fail if the path does not exist (return nil).
 	RemoveAll(path string) error
 
@@ -91,8 +91,11 @@ type Fs interface {
 	// The name of this FileSystem
 	Name() string
 
-	//Chmod changes the mode of the named file to mode.
+	// Chmod changes the mode of the named file to mode.
 	Chmod(name string, mode os.FileMode) error
+
+	// Chown changes the uid and gid of the named file.
+	Chown(name string, uid, gid int) error
 
 	//Chtimes changes the access and modification times of the named file
 	Chtimes(name string, atime time.Time, mtime time.Time) error

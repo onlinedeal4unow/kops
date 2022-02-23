@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,20 @@ limitations under the License.
 package mockautoscaling
 
 import (
+	"sync"
+
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface"
 )
 
 type MockAutoscaling struct {
-	Groups []*autoscaling.Group
+	// Mock out interface
+	autoscalingiface.AutoScalingAPI
+
+	mutex             sync.Mutex
+	Groups            map[string]*autoscaling.Group
+	WarmPoolInstances map[string][]*autoscaling.Instance
+	LifecycleHooks    map[string]*autoscaling.LifecycleHook
 }
 
 var _ autoscalingiface.AutoScalingAPI = &MockAutoscaling{}

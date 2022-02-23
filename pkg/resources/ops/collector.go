@@ -21,25 +21,33 @@ import (
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/resources"
+	"k8s.io/kops/pkg/resources/aws"
+	"k8s.io/kops/pkg/resources/azure"
 	"k8s.io/kops/pkg/resources/digitalocean"
 	"k8s.io/kops/pkg/resources/gce"
+	"k8s.io/kops/pkg/resources/openstack"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
+	cloudazure "k8s.io/kops/upup/pkg/fi/cloudup/azure"
+	clouddo "k8s.io/kops/upup/pkg/fi/cloudup/do"
 	cloudgce "k8s.io/kops/upup/pkg/fi/cloudup/gce"
-	"k8s.io/kops/upup/pkg/fi/cloudup/vsphere"
+	cloudopenstack "k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 )
 
 // ListResources collects the resources from the specified cloud
-func ListResources(cloud fi.Cloud, clusterName string, region string) (map[string]*resources.Resource, error) {
+func ListResources(cloud fi.Cloud, cluster *kops.Cluster, region string) (map[string]*resources.Resource, error) {
+	clusterName := cluster.Name
 	switch cloud.ProviderID() {
 	case kops.CloudProviderAWS:
-		return resources.ListResourcesAWS(cloud.(awsup.AWSCloud), clusterName)
+		return aws.ListResourcesAWS(cloud.(awsup.AWSCloud), clusterName)
 	case kops.CloudProviderDO:
-		return digitalocean.ListResources(cloud, clusterName)
+		return digitalocean.ListResources(cloud.(clouddo.DOCloud), clusterName)
 	case kops.CloudProviderGCE:
 		return gce.ListResourcesGCE(cloud.(cloudgce.GCECloud), clusterName, region)
-	case kops.CloudProviderVSphere:
-		return resources.ListResourcesVSphere(cloud.(*vsphere.VSphereCloud), clusterName)
+	case kops.CloudProviderOpenstack:
+		return openstack.ListResources(cloud.(cloudopenstack.OpenstackCloud), clusterName)
+	case kops.CloudProviderAzure:
+		return azure.ListResourcesAzure(cloud.(cloudazure.AzureCloud), cluster)
 	default:
 		return nil, fmt.Errorf("delete on clusters on %q not (yet) supported", cloud.ProviderID())
 	}

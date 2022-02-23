@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,42 +18,35 @@ package channels
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
 	"strings"
 
-	"github.com/golang/glog"
-	"k8s.io/kops/util/pkg/vfs"
+	"k8s.io/klog/v2"
 )
 
 // Apply calls kubectl apply to apply the manifest.
 // We will likely in future change this to create things directly (or more likely embed this logic into kubectl itself)
-func Apply(manifest string) error {
+func Apply(data []byte) error {
 	// We copy the manifest to a temp file because it is likely e.g. an s3 URL, which kubectl can't read
-	data, err := vfs.Context.ReadFile(manifest)
-	if err != nil {
-		return fmt.Errorf("error reading manifest: %v", err)
-	}
-
-	tmpDir, err := ioutil.TempDir("", "channel")
+	tmpDir, err := os.MkdirTemp("", "channel")
 	if err != nil {
 		return fmt.Errorf("error creating temp dir: %v", err)
 	}
 
 	defer func() {
 		if err := os.RemoveAll(tmpDir); err != nil {
-			glog.Warningf("error deleting temp dir %q: %v", tmpDir, err)
+			klog.Warningf("error deleting temp dir %q: %v", tmpDir, err)
 		}
 	}()
 
 	localManifestFile := path.Join(tmpDir, "manifest.yaml")
-	if err := ioutil.WriteFile(localManifestFile, data, 0600); err != nil {
+	if err := os.WriteFile(localManifestFile, data, 0o600); err != nil {
 		return fmt.Errorf("error writing temp file: %v", err)
 	}
 
-	_, err = execKubectl("apply", "-f", localManifestFile)
+	_, err = execKubectl("apply", "-f", localManifestFile, "--server-side", "--force-conflicts", "--field-manager=kops")
 	return err
 }
 
@@ -64,12 +57,12 @@ func execKubectl(args ...string) (string, error) {
 	cmd.Env = env
 
 	human := strings.Join(cmd.Args, " ")
-	glog.V(2).Infof("Running command: %s", human)
+	klog.V(2).Infof("Running command: %s", human)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		glog.Infof("error running %s", human)
-		glog.Info(string(output))
-		return string(output), fmt.Errorf("error running kubectl")
+		klog.Infof("error running %s", human)
+		klog.Info(string(output))
+		return string(output), fmt.Errorf("error running kubectl: %v", err)
 	}
 
 	return string(output), err

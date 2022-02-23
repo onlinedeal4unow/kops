@@ -1,14 +1,14 @@
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: Cluster
 metadata:
   creationTimestamp: "2016-12-12T04:13:14Z"
-  name: privateweave.example.com
+  name: lifecyclephases.example.com
 spec:
   kubernetesApiAccess:
   - 0.0.0.0/0
   channel: stable
   cloudProvider: aws
-  configBase: memfs://clusters.example.com/privateweave.example.com
+  configBase: memfs://clusters.example.com/lifecyclephases.example.com
   etcdClusters:
   - etcdMembers:
     - instanceGroup: master-us-test-1a
@@ -18,12 +18,15 @@ spec:
     - instanceGroup: master-us-test-1a
       name: us-test-1a
     name: events
-  kubernetesVersion: v1.4.12
-  masterInternalName: api.internal.privateweave.example.com
-  masterPublicName: api.privateweave.example.com
+  iam: {}
+  kubelet:
+    anonymousAuth: false
+  kubernetesVersion: v1.21.0
+  masterInternalName: api.internal.lifecyclephases.example.com
+  masterPublicName: api.lifecyclephases.example.com
   networkCIDR: 172.20.0.0/16
   networking:
-    weave: {}
+    cni: {}
   nonMasqueradeCIDR: 100.64.0.0/10
   sshAccess:
   - 0.0.0.0/0
@@ -42,13 +45,13 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-12T04:13:15Z"
   name: master-us-test-1a
   labels:
-    kops.k8s.io/cluster: privateweave.example.com
+    kops.k8s.io/cluster: lifecyclephases.example.com
 spec:
   associatePublicIp: true
   image: kope.io/k8s-1.4-debian-jessie-amd64-hvm-ebs-2016-10-21
@@ -61,13 +64,13 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-12T04:13:15Z"
   name: nodes
   labels:
-    kops.k8s.io/cluster: privateweave.example.com
+    kops.k8s.io/cluster: lifecyclephases.example.com
 spec:
   associatePublicIp: true
   image: kope.io/k8s-1.4-debian-jessie-amd64-hvm-ebs-2016-10-21
@@ -81,13 +84,13 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-14T15:32:41Z"
   name: bastion
   labels:
-    kops.k8s.io/cluster: privateweave.example.com
+    kops.k8s.io/cluster: lifecyclephases.example.com
 spec:
   associatePublicIp: true
   image: kope.io/k8s-1.4-debian-jessie-amd64-hvm-ebs-2016-10-21

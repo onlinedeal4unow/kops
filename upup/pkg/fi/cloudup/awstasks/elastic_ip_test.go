@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,35 +24,43 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+
 	"k8s.io/kops/cloudmock/aws/mockec2"
+	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 )
 
-const defaultDeadline = 2 * time.Second
+var testRunTasksOptions = fi.RunTasksOptions{
+	MaxTaskDuration:         2 * time.Second,
+	WaitAfterAllTasksFailed: 500 * time.Millisecond,
+}
 
 func TestElasticIPCreate(t *testing.T) {
 	cloud := awsup.BuildMockAWSCloud("us-east-1", "abc")
 	c := &mockec2.MockEC2{}
 	cloud.MockEC2 = c
-
 	// We define a function so we can rebuild the tasks, because we modify in-place when running
 	buildTasks := func() map[string]fi.Task {
 		vpc1 := &VPC{
-			Name: s("vpc1"),
-			CIDR: s("172.20.0.0/16"),
-			Tags: map[string]string{"Name": "vpc1"},
+			Name:      s("vpc1"),
+			Lifecycle: fi.LifecycleSync,
+			CIDR:      s("172.20.0.0/16"),
+			Tags:      map[string]string{"Name": "vpc1"},
 		}
 		subnet1 := &Subnet{
-			Name: s("subnet1"),
-			VPC:  vpc1,
-			CIDR: s("172.20.1.0/24"),
-			Tags: map[string]string{"Name": "subnet1"},
+			Name:      s("subnet1"),
+			Lifecycle: fi.LifecycleSync,
+			VPC:       vpc1,
+			CIDR:      s("172.20.1.0/24"),
+			Tags:      map[string]string{"Name": "subnet1"},
 		}
 		eip1 := &ElasticIP{
 			Name:        s("eip1"),
+			Lifecycle:   fi.LifecycleSync,
 			TagOnSubnet: subnet1,
+			Tags:        map[string]string{"Name": "eip1"},
 		}
 
 		return map[string]fi.Task{
@@ -74,8 +82,9 @@ func TestElasticIPCreate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("error building context: %v", err)
 		}
+		defer context.Close()
 
-		if err := context.RunTasks(defaultDeadline); err != nil {
+		if err := context.RunTasks(testRunTasksOptions); err != nil {
 			t.Fatalf("unexpected error during Run: %v", err)
 		}
 
@@ -91,8 +100,14 @@ func TestElasticIPCreate(t *testing.T) {
 			AllocationId: eip1.ID,
 			Domain:       s("vpc"),
 			PublicIp:     s("192.0.2.1"),
+			Tags: []*ec2.Tag{
+				{
+					Key:   s("Name"),
+					Value: s("eip1"),
+				},
+			},
 		}
-		actual := c.Addresses[0]
+		actual := c.Addresses[*eip1.ID]
 		if !reflect.DeepEqual(actual, expected) {
 			t.Fatalf("Unexpected ElasticIP: expected=%v actual=%v", expected, actual)
 		}
@@ -105,14 +120,20 @@ func TestElasticIPCreate(t *testing.T) {
 }
 
 func checkNoChanges(t *testing.T, cloud fi.Cloud, allTasks map[string]fi.Task) {
-	assetBuilder := assets.NewAssetBuilder(nil)
+	cluster := &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			KubernetesVersion: "v1.9.0",
+		},
+	}
+	assetBuilder := assets.NewAssetBuilder(cluster, false)
 	target := fi.NewDryRunTarget(assetBuilder, os.Stderr)
 	context, err := fi.NewContext(target, nil, cloud, nil, nil, nil, true, allTasks)
 	if err != nil {
 		t.Fatalf("error building context: %v", err)
 	}
+	defer context.Close()
 
-	if err := context.RunTasks(defaultDeadline); err != nil {
+	if err := context.RunTasks(testRunTasksOptions); err != nil {
 		t.Fatalf("unexpected error during Run: %v", err)
 	}
 
@@ -123,5 +144,4 @@ func checkNoChanges(t *testing.T, cloud fi.Cloud, allTasks map[string]fi.Task) {
 		}
 		t.Fatalf("Target had changes after executing: %v", b.String())
 	}
-
 }

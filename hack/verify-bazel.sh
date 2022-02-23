@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2016 The Kubernetes Authors.
+# Copyright 2019 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,53 +13,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o nounset
-set -o pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-export KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
+cd "${KOPS_ROOT}/hack" || exit 1
+go build -o "${TOOLS_BIN}/gazelle" github.com/bazelbuild/bazel-gazelle/cmd/gazelle
+cd "${KOPS_ROOT}" || exit 1
 
-# Example:  kube::util::trap_add 'echo "in trap DEBUG"' DEBUG
-# See: http://stackoverflow.com/questions/3338030/multiple-bash-traps-for-the-same-signal
-trap_add() {
-  local trap_add_cmd
-  trap_add_cmd=$1
-  shift
+gazelle_diff=$("${TOOLS_BIN}/gazelle" fix \
+  -external=vendored \
+  -exclude=tests/e2e \
+  -exclude=hack \
+  -mode=diff \
+  -proto=disable \
+  -repo_root="${KOPS_ROOT}") || _=$?
 
-  for trap_add_name in "$@"; do
-    local existing_cmd
-    local new_cmd
+if [[ -n "${gazelle_diff}" ]]; then
+  echo "${gazelle_diff}" >&2
+  echo >&2
+  echo "FAIL: ./hack/verify-bazel.sh failed, as the bazel files are not up to date" >&2
+  echo "FAIL: Please execute the following command: ./hack/update-bazel.sh" >&2
+  exit 1
+fi
 
-    # Grab the currently defined trap commands for this trap
-    existing_cmd=`trap -p "${trap_add_name}" |  awk -F"'" '{print $2}'`
-
-    if [[ -z "${existing_cmd}" ]]; then
-      new_cmd="${trap_add_cmd}"
-    else
-      new_cmd="${trap_add_cmd};${existing_cmd}"
-    fi
-
-    # Assign the test
-    trap "${new_cmd}" "${trap_add_name}"
-  done
-}
-
-_tmpdir="$(mktemp -d -t verify-bazel.XXXXXX)"
-trap_add "rm -rf ${_tmpdir}" EXIT
-
-_tmp_gopath="${_tmpdir}/go"
-_tmp_kuberoot="${_tmp_gopath}/src/k8s.io/kops"
-mkdir -p "${_tmp_kuberoot}/.."
-cp -a "${KUBE_ROOT}" "${_tmp_kuberoot}/.."
-
-cd "${_tmp_kuberoot}"
-GOPATH="${_tmp_gopath}" bazel run //:gazelle
-
-diff=$(diff -Naupr "${KUBE_ROOT}" "${_tmp_kuberoot}" || true)
-
-if [[ -n "${diff}" ]]; then
-  echo "${diff}"
-  echo
-  echo "Run make bazel-gazelle"
+# Make sure there are no BUILD files outside vendor - we should only have
+# BUILD.bazel files.
+old_build_files=$(find . -name BUILD \( -type f -o -type l \) \
+  -not -path './vendor/*' | sort)
+if [[ -n "${old_build_files}" ]]; then
+  echo "One or more BUILD files found in the tree:" >&2
+  echo "${old_build_files}" >&2
+  echo >&2
+  echo "FAIL: Only bazel files named BUILD.bazel are allowed." >&2
+  echo "FAIL: Please move incorrectly named files to BUILD.bazel" >&2
   exit 1
 fi

@@ -1,10 +1,9 @@
 package godo
 
 import (
+	"context"
 	"fmt"
 	"net/http"
-
-	"github.com/digitalocean/godo/context"
 )
 
 const (
@@ -18,7 +17,7 @@ const (
 )
 
 // ActionsService handles communction with action related methods of the
-// DigitalOcean API: https://developers.digitalocean.com/documentation/v2#actions
+// DigitalOcean API: https://docs.digitalocean.com/reference/api/api-reference/#tag/Actions
 type ActionsService interface {
 	List(context.Context, *ListOptions) ([]Action, *Response, error)
 	Get(context.Context, int) (*Action, *Response, error)
@@ -35,6 +34,7 @@ var _ ActionsService = &ActionsServiceOp{}
 type actionsRoot struct {
 	Actions []Action `json:"actions"`
 	Links   *Links   `json:"links"`
+	Meta    *Meta    `json:"meta"`
 }
 
 type actionRoot struct {
@@ -74,6 +74,9 @@ func (s *ActionsServiceOp) List(ctx context.Context, opt *ListOptions) ([]Action
 	}
 	if l := root.Links; l != nil {
 		resp.Links = l
+	}
+	if m := root.Meta; m != nil {
+		resp.Meta = m
 	}
 
 	return root.Actions, resp, err

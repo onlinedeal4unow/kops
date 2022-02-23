@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Copyright 2017 The Kubernetes Authors.
 #
@@ -35,7 +35,7 @@
 # NODEUP_BUCKET="s3-devel-bucket-name-store-nodeup" \
 # IMAGE="kope.io/k8s-1.6-debian-jessie-amd64-hvm-ebs-2017-05-02" \
 # ./dev-build.sh
-# 
+#
 # # TLDR;
 # 1. setup dns in route53
 # 2. create s3 buckets - state store and nodeup bucket
@@ -45,14 +45,14 @@
 # 6. use ssh-agent and ssh -A
 # 7. your pem will be the access token
 # 8. user is admin, and the default is debian
-# 
+#
 # # For more details see:
 #
-# https://github.com/kubernetes/kops/blob/master/docs/aws.md
+# https://github.com/kubernetes/kops/blob/master/docs/getting_started/aws.md
 #
 ###############################################################################
 
-KOPS_DIRECTORY="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+. "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 #
 # Check that required binaries are installed
@@ -60,7 +60,7 @@ KOPS_DIRECTORY="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 command -v make >/dev/null 2>&1 || { echo >&2 "I require make but it's not installed.  Aborting."; exit 1; }
 command -v go >/dev/null 2>&1 || { echo >&2 "I require go but it's not installed.  Aborting."; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo >&2 "I require docker but it's not installed.  Aborting."; exit 1; }
-command -v aws >/dev/null 2>&1 || { echo >&2 "I require aws but it's not installed.  Aborting."; exit 1; }
+command -v aws >/dev/null 2>&1 || { echo >&2 "I require aws cli but it's not installed.  Aborting."; exit 1; }
 
 #
 # Check that expected vars are set
@@ -78,7 +78,6 @@ MASTER_ZONES=${MASTER_ZONES:-"us-west-2a,us-west-2b,us-west-2c"}
 MASTER_SIZE=${MASTER_SIZE:-m4.large}
 KOPS_CREATE=${KOPS_CREATE:-yes}
 
-
 # NETWORK
 TOPOLOGY=${TOPOLOGY:-private}
 NETWORKING=${NETWORKING:-weave}
@@ -86,7 +85,7 @@ NETWORKING=${NETWORKING:-weave}
 # How verbose go logging is
 VERBOSITY=${VERBOSITY:-10}
 
-cd $KOPS_DIRECTORY/..
+cd "${KOPS_ROOT}"
 
 GIT_VER=git-$(git describe --always)
 [ -z "$GIT_VER" ] && echo "we do not have GIT_VER something is very wrong" && exit 1;
@@ -94,11 +93,15 @@ GIT_VER=git-$(git describe --always)
 echo ==========
 echo "Starting build"
 
-export CI=1
-make && make test && S3_BUCKET=s3://${NODEUP_BUCKET} make upload
+# removing CI=1 because it forces a new upload every time
+# export CI=1
+make && UPLOAD_DEST=s3://${NODEUP_BUCKET} make upload
 
-KOPS_CHANNEL=$(kops version | awk '{ print $2 }' |sed 's/\+/%2B/')
-KOPS_BASE_URL="http://${NODEUP_BUCKET}.s3.amazonaws.com/kops/${KOPS_CHANNEL}/"
+# removing make test since it relies on the files in the bucket
+# && make test
+
+KOPS_VERSION=$(kops version --short)
+KOPS_BASE_URL="http://${NODEUP_BUCKET}.s3.amazonaws.com/kops/${KOPS_VERSION}/"
 
 echo "KOPS_BASE_URL=${KOPS_BASE_URL}"
 echo "NODEUP_URL=${KOPS_BASE_URL}linux/amd64/nodeup"
@@ -121,11 +124,11 @@ if [[ $TOPOLOGY == "private" ]]; then
   kops_command+=" --bastion='true'"
 fi
 
-if [ -n "${KOPS_FEATURE_FLAGS+x}" ]; then 
+if [ -n "${KOPS_FEATURE_FLAGS+x}" ]; then
   kops_command=KOPS_FEATURE_FLAGS="${KOPS_FEATURE_FLAGS}" $kops_command
 fi
 
-if [[ $KOPS_CREATE == "yes" ]]; then 
+if [[ $KOPS_CREATE == "yes" ]]; then
   kops_command="$kops_command --yes"
 fi
 

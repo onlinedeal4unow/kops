@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,8 +17,9 @@ limitations under the License.
 package vfs
 
 import (
+	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -26,12 +27,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/glog"
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/gophercloud/gophercloud"
-	"golang.org/x/net/context"
-	"golang.org/x/oauth2/google"
+	"google.golang.org/api/option"
 	storage "google.golang.org/api/storage/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/klog/v2"
+
+	vault "github.com/hashicorp/vault/api"
 )
 
 // VFSContext is a 'context' for VFS, that is normally a singleton
@@ -46,6 +50,9 @@ type VFSContext struct {
 	gcsClient *storage.Service
 	// swiftClient is the openstack swift client
 	swiftClient *gophercloud.ServiceClient
+
+	vaultClient *vault.Client
+	azureClient *azureClient
 }
 
 var Context = VFSContext{
@@ -53,11 +60,38 @@ var Context = VFSContext{
 	k8sContext: NewKubernetesContext(),
 }
 
-// ReadLocation reads a file from a vfs URL
+type vfsOptions struct {
+	backoff wait.Backoff
+}
+
+type VFSOption func(options *vfsOptions)
+
+// WithBackoff specifies a custom VFS backoff policy
+func WithBackoff(backoff wait.Backoff) VFSOption {
+	return func(options *vfsOptions) {
+		options.backoff = backoff
+	}
+}
+
+// ReadFile reads a file from a vfs URL
 // It supports additional schemes which don't (yet) have full VFS implementations:
 //   metadata: reads from instance metadata on GCE/AWS
 //   http / https: reads from HTTP
-func (c *VFSContext) ReadFile(location string) ([]byte, error) {
+func (c *VFSContext) ReadFile(location string, options ...VFSOption) ([]byte, error) {
+	ctx := context.TODO()
+
+	var opts vfsOptions
+	// Exponential backoff, starting with 500 milliseconds, doubling each time, 5 steps
+	opts.backoff = wait.Backoff{
+		Duration: 500 * time.Millisecond,
+		Factor:   2,
+		Steps:    5,
+	}
+
+	for _, option := range options {
+		option(&opts)
+	}
+
 	if strings.Contains(location, "://") && !strings.HasPrefix(location, "file://") {
 		// Handle our special case schemas
 		u, err := url.Parse(location)
@@ -69,20 +103,27 @@ func (c *VFSContext) ReadFile(location string) ([]byte, error) {
 		case "metadata":
 			switch u.Host {
 			case "gce":
-				httpURL := "http://169.254.169.254/computeMetadata/v1/instance/attributes/" + u.Path
+				httpURL := "http://169.254.169.254/computeMetadata/v1/" + u.Path
 				httpHeaders := make(map[string]string)
 				httpHeaders["Metadata-Flavor"] = "Google"
-				return c.readHttpLocation(httpURL, httpHeaders)
+				return c.readHTTPLocation(httpURL, httpHeaders, opts)
 			case "aws":
-				httpURL := "http://169.254.169.254/latest/" + u.Path
-				return c.readHttpLocation(httpURL, nil)
-
+				return c.readAWSMetadata(ctx, u.Path)
+			case "digitalocean":
+				httpURL := "http://169.254.169.254/metadata/v1" + u.Path
+				return c.readHTTPLocation(httpURL, nil, opts)
+			case "alicloud":
+				httpURL := "http://100.100.100.200/latest/meta-data/" + u.Path
+				return c.readHTTPLocation(httpURL, nil, opts)
+			case "openstack":
+				httpURL := "http://169.254.169.254/latest/meta-data/" + u.Path
+				return c.readHTTPLocation(httpURL, nil, opts)
 			default:
 				return nil, fmt.Errorf("unknown metadata type: %q in %q", u.Host, location)
 			}
 
 		case "http", "https":
-			return c.readHttpLocation(location, nil)
+			return c.readHTTPLocation(location, nil, opts)
 		}
 	}
 
@@ -100,8 +141,17 @@ func (c *VFSContext) BuildVfsPath(p string) (Path, error) {
 		return NewFSPath(p), nil
 	}
 
+	if strings.HasPrefix(p, "file://") {
+		f := strings.TrimPrefix(p, "file://")
+		return NewFSPath(f), nil
+	}
+
 	if strings.HasPrefix(p, "s3://") {
 		return c.buildS3Path(p)
+	}
+
+	if strings.HasPrefix(p, "do://") {
+		return c.buildDOPath(p)
 	}
 
 	if strings.HasPrefix(p, "memfs://") {
@@ -120,24 +170,43 @@ func (c *VFSContext) BuildVfsPath(p string) (Path, error) {
 		return c.buildOpenstackSwiftPath(p)
 	}
 
+	if strings.HasPrefix(p, "vault://") {
+		return c.buildVaultPath(p)
+	}
+
+	if strings.HasPrefix(p, "azureblob://") {
+		return c.buildAzureBlobPath(p)
+	}
+
 	return nil, fmt.Errorf("unknown / unhandled path type: %q", p)
 }
 
-// readHttpLocation reads an http (or https) url.
+// readAWSMetadata reads the specified path from the AWS EC2 metadata service
+func (c *VFSContext) readAWSMetadata(ctx context.Context, path string) ([]byte, error) {
+	awsSession, err := session.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("error building AWS session: %v", err)
+	}
+	client := ec2metadata.New(awsSession)
+	if strings.HasPrefix(path, "/meta-data/") {
+		s, err := client.GetMetadataWithContext(ctx, strings.TrimPrefix(path, "/meta-data/"))
+		if err != nil {
+			return nil, fmt.Errorf("error reading from AWS metadata service: %v", err)
+		}
+		return []byte(s), nil
+	}
+	// There are others (e.g. user-data), but as we don't use them yet let's not expose them
+	return nil, fmt.Errorf("unhandled aws metadata path %q", path)
+}
+
+// readHTTPLocation reads an http (or https) url.
 // It returns the contents, or an error on any non-200 response.  On a 404, it will return os.ErrNotExist
 // It will retry a few times on a 500 class error
-func (c *VFSContext) readHttpLocation(httpURL string, httpHeaders map[string]string) ([]byte, error) {
-	// Exponential backoff, starting with 500 milliseconds, doubling each time, 5 steps
-	backoff := wait.Backoff{
-		Duration: 500 * time.Millisecond,
-		Factor:   2,
-		Steps:    5,
-	}
-
+func (c *VFSContext) readHTTPLocation(httpURL string, httpHeaders map[string]string, opts vfsOptions) ([]byte, error) {
 	var body []byte
 
-	done, err := RetryWithBackoff(backoff, func() (bool, error) {
-		glog.V(4).Infof("Performing HTTP request: GET %s", httpURL)
+	done, err := RetryWithBackoff(opts.backoff, func() (bool, error) {
+		klog.V(4).Infof("Performing HTTP request: GET %s", httpURL)
 		req, err := http.NewRequest("GET", httpURL, nil)
 		if err != nil {
 			return false, err
@@ -152,7 +221,7 @@ func (c *VFSContext) readHttpLocation(httpURL string, httpHeaders map[string]str
 		if err != nil {
 			return false, fmt.Errorf("error fetching %q: %v", httpURL, err)
 		}
-		body, err = ioutil.ReadAll(response.Body)
+		body, err = io.ReadAll(response.Body)
 		if err != nil {
 			return false, fmt.Errorf("error reading response for %q: %v", httpURL, err)
 		}
@@ -205,11 +274,11 @@ func RetryWithBackoff(backoff wait.Backoff, condition func() (bool, error)) (boo
 		}
 		noMoreRetries := i >= backoff.Steps
 		if !noMoreRetries && err != nil {
-			glog.V(2).Infof("retrying after error %v", err)
+			klog.V(2).Infof("retrying after error %v", err)
 		}
 
 		if noMoreRetries {
-			glog.V(2).Infof("hit maximum retries %d with error %v", i, err)
+			klog.V(2).Infof("hit maximum retries %d with error %v", i, err)
 			return done, err
 		}
 	}
@@ -229,7 +298,25 @@ func (c *VFSContext) buildS3Path(p string) (*S3Path, error) {
 		return nil, fmt.Errorf("invalid s3 path: %q", p)
 	}
 
-	s3path := newS3Path(c.s3Context, bucket, u.Path)
+	s3path := newS3Path(c.s3Context, u.Scheme, bucket, u.Path, true)
+	return s3path, nil
+}
+
+func (c *VFSContext) buildDOPath(p string) (*S3Path, error) {
+	u, err := url.Parse(p)
+	if err != nil {
+		return nil, fmt.Errorf("invalid spaces path: %q", p)
+	}
+	if u.Scheme != "do" {
+		return nil, fmt.Errorf("invalid spaces path: %q", p)
+	}
+
+	bucket := strings.TrimSuffix(u.Host, "/")
+	if bucket == "" {
+		return nil, fmt.Errorf("invalid spaces path: %q", p)
+	}
+
+	s3path := newS3Path(c.s3Context, u.Scheme, bucket, u.Path, false)
 	return s3path, nil
 }
 
@@ -304,12 +391,8 @@ func (c *VFSContext) getGCSClient() (*storage.Service, error) {
 	// TODO: Should we fall back to read-only?
 	scope := storage.DevstorageReadWriteScope
 
-	httpClient, err := google.DefaultClient(context.Background(), scope)
-	if err != nil {
-		return nil, fmt.Errorf("error building GCS HTTP client: %v", err)
-	}
-
-	gcsClient, err := storage.New(httpClient)
+	ctx := context.Background()
+	gcsClient, err := storage.NewService(ctx, option.WithScopes(scope))
 	if err != nil {
 		return nil, fmt.Errorf("error building GCS client: %v", err)
 	}
@@ -342,4 +425,75 @@ func (c *VFSContext) buildOpenstackSwiftPath(p string) (*SwiftPath, error) {
 	}
 
 	return NewSwiftPath(c.swiftClient, bucket, u.Path)
+}
+
+func (c *VFSContext) buildVaultPath(p string) (*VaultPath, error) {
+	u, err := url.Parse(p)
+	if err != nil {
+		return nil, fmt.Errorf("invalid vault url: %q", p)
+	}
+
+	var scheme string
+
+	if u.Scheme != "vault" {
+		return nil, fmt.Errorf("invalid vault url: %q", p)
+	}
+
+	queryValues := u.Query()
+
+	scheme = "https://"
+	if queryValues.Get("tls") == "false" {
+		scheme = "http://"
+	}
+
+	if c.vaultClient == nil {
+
+		vaultClient, err := newVaultClient(scheme, u.Hostname(), u.Port())
+		if err != nil {
+			return nil, err
+		}
+
+		c.vaultClient = vaultClient
+	}
+
+	return newVaultPath(c.vaultClient, scheme, u.Path)
+}
+
+func (c *VFSContext) buildAzureBlobPath(p string) (*AzureBlobPath, error) {
+	u, err := url.Parse(p)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse %q: %s", p, err)
+	}
+
+	if u.Scheme != "azureblob" {
+		return nil, fmt.Errorf("invalid Azure Blob scheme: %q", p)
+	}
+
+	container := strings.TrimSuffix(u.Host, "/")
+	if container == "" {
+		return nil, fmt.Errorf("no container specified: %q", p)
+	}
+
+	client, err := c.getAzureBlobClient()
+	if err != nil {
+		return nil, err
+	}
+
+	return NewAzureBlobPath(client, container, u.Path), nil
+}
+
+func (c *VFSContext) getAzureBlobClient() (*azureClient, error) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	if c.azureClient != nil {
+		return c.azureClient, nil
+	}
+
+	client, err := newAzureClient()
+	if err != nil {
+		return nil, err
+	}
+	c.azureClient = client
+	return client, nil
 }

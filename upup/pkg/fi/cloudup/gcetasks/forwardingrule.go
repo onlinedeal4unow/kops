@@ -19,18 +19,19 @@ package gcetasks
 import (
 	"fmt"
 
-	"github.com/golang/glog"
-	compute "google.golang.org/api/compute/v0.beta"
+	compute "google.golang.org/api/compute/v1"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 // ForwardingRule represents a GCE ForwardingRule
-//go:generate fitask -type=ForwardingRule
+// +kops:fitask
 type ForwardingRule struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	PortRange  string
 	TargetPool *TargetPool
@@ -48,7 +49,7 @@ func (e *ForwardingRule) Find(c *fi.Context) (*ForwardingRule, error) {
 	cloud := c.Cloud.(gce.GCECloud)
 	name := fi.StringValue(e.Name)
 
-	r, err := cloud.Compute().ForwardingRules.Get(cloud.Project(), cloud.Region(), name).Do()
+	r, err := cloud.Compute().ForwardingRules().Get(cloud.Project(), cloud.Region(), name)
 	if err != nil {
 		if gce.IsNotFound(err) {
 			return nil, nil
@@ -123,26 +124,26 @@ func (_ *ForwardingRule) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Forwardin
 	}
 
 	if a == nil {
-		glog.V(4).Infof("Creating ForwardingRule %q", o.Name)
+		klog.V(4).Infof("Creating ForwardingRule %q", o.Name)
 
-		_, err := t.Cloud.Compute().ForwardingRules.Insert(t.Cloud.Project(), t.Cloud.Region(), o).Do()
+		_, err := t.Cloud.Compute().ForwardingRules().Insert(t.Cloud.Project(), t.Cloud.Region(), o)
 		if err != nil {
 			return fmt.Errorf("error creating ForwardingRule %q: %v", o.Name, err)
 		}
 
 	} else {
-		return fmt.Errorf("Cannot apply changes to ForwardingRule: %v", changes)
+		return fmt.Errorf("cannot apply changes to ForwardingRule: %v", changes)
 	}
 
 	return nil
 }
 
 type terraformForwardingRule struct {
-	Name       string             `json:"name"`
-	PortRange  string             `json:"port_range,omitempty"`
-	Target     *terraform.Literal `json:"target,omitempty"`
-	IPAddress  *terraform.Literal `json:"ip_address,omitempty"`
-	IPProtocol string             `json:"ip_protocol,omitempty"`
+	Name       string                   `cty:"name"`
+	PortRange  string                   `cty:"port_range"`
+	Target     *terraformWriter.Literal `cty:"target"`
+	IPAddress  *terraformWriter.Literal `cty:"ip_address"`
+	IPProtocol string                   `cty:"ip_protocol"`
 }
 
 func (_ *ForwardingRule) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *ForwardingRule) error {
@@ -165,8 +166,8 @@ func (_ *ForwardingRule) RenderTerraform(t *terraform.TerraformTarget, a, e, cha
 	return t.RenderResource("google_compute_forwarding_rule", name, tf)
 }
 
-func (e *ForwardingRule) TerraformLink() *terraform.Literal {
+func (e *ForwardingRule) TerraformLink() *terraformWriter.Literal {
 	name := fi.StringValue(e.Name)
 
-	return terraform.LiteralSelfLink("google_compute_forwarding_rule", name)
+	return terraformWriter.LiteralSelfLink("google_compute_forwarding_rule", name)
 }

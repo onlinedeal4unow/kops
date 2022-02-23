@@ -6,11 +6,12 @@ go_library(
         "cache.go",
         "cachedblobdescriptorstore.go",
     ],
+    importmap = "k8s.io/kops/vendor/github.com/docker/distribution/registry/storage/cache",
     importpath = "github.com/docker/distribution/registry/storage/cache",
     visibility = ["//visibility:public"],
     deps = [
         "//vendor/github.com/docker/distribution:go_default_library",
-        "//vendor/github.com/docker/distribution/context:go_default_library",
+        "//vendor/github.com/docker/distribution/metrics:go_default_library",
         "//vendor/github.com/opencontainers/go-digest:go_default_library",
     ],
 )

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,11 +17,12 @@ limitations under the License.
 package secrets
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/acls"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
@@ -49,11 +50,42 @@ func (c *VFSSecretStore) VFSPath() vfs.Path {
 
 func (c *VFSSecretStore) MirrorTo(basedir vfs.Path) error {
 	if basedir.Path() == c.basedir.Path() {
+		klog.V(2).Infof("Skipping mirror of secret store from %q to %q (same path)", c.basedir, basedir)
 		return nil
 	}
-	glog.V(2).Infof("Mirroring secret store from %q to %q", c.basedir, basedir)
+	klog.V(2).Infof("Mirroring secret store from %q to %q", c.basedir, basedir)
 
-	return vfs.CopyTree(c.basedir, basedir, func(p vfs.Path) (vfs.ACL, error) { return acls.GetACL(p, c.cluster) })
+	secrets, err := c.ListSecrets()
+	if err != nil {
+		return fmt.Errorf("error listing secrets for mirror: %v", err)
+	}
+
+	for _, name := range secrets {
+		secret, err := c.FindSecret(name)
+		if err != nil {
+			return fmt.Errorf("error reading secret %q for mirror: %v", name, err)
+		}
+
+		if secret == nil {
+			return fmt.Errorf("unable to find secret %q for mirror", name)
+		}
+
+		p := BuildVfsSecretPath(basedir, name)
+
+		acl, err := acls.GetACL(p, c.cluster)
+		if err != nil {
+			return fmt.Errorf("error building acl for secret %q for mirror: %v", name, err)
+		}
+
+		klog.Infof("mirroring secret %s -> %s", name, p)
+
+		err = createSecret(secret, p, acl, true)
+		if err != nil {
+			return fmt.Errorf("error writing secret %q for mirror: %v", name, err)
+		}
+	}
+
+	return nil
 }
 
 func BuildVfsSecretPath(basedir vfs.Path, name string) vfs.Path {
@@ -74,23 +106,20 @@ func (c *VFSSecretStore) FindSecret(id string) (*fi.Secret, error) {
 }
 
 // DeleteSecret implements fi.SecretStore DeleteSecret
-func (c *VFSSecretStore) DeleteSecret(item *fi.KeystoreItem) error {
-	switch item.Type {
-	case fi.SecretTypeSecret:
-		p := c.buildSecretPath(item.Name)
-		return p.Remove()
-
-	default:
-		return fmt.Errorf("deletion of secretstore items of type %v not (yet) supported", item.Type)
-	}
+func (c *VFSSecretStore) DeleteSecret(name string) error {
+	p := c.buildSecretPath(name)
+	return p.Remove()
 }
 
 func (c *VFSSecretStore) ListSecrets() ([]string, error) {
 	files, err := c.basedir.ReadDir()
+	var ids []string
+	if os.IsNotExist(err) {
+		return ids, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error listing secrets directory: %v", err)
 	}
-	var ids []string
 	for _, f := range files {
 		id := f.Base()
 		ids = append(ids, id)
@@ -127,10 +156,10 @@ func (c *VFSSecretStore) GetOrCreateSecret(id string, secret *fi.Secret) (*fi.Se
 			return nil, false, err
 		}
 
-		err = c.createSecret(secret, p, acl, false)
+		err = createSecret(secret, p, acl, false)
 		if err != nil {
 			if os.IsExist(err) && i == 0 {
-				glog.Infof("Got already-exists error when writing secret; likely due to concurrent creation.  Will retry")
+				klog.Infof("Got already-exists error when writing secret; likely due to concurrent creation.  Will retry")
 				continue
 			} else {
 				return nil, false, err
@@ -145,7 +174,7 @@ func (c *VFSSecretStore) GetOrCreateSecret(id string, secret *fi.Secret) (*fi.Se
 	// Make double-sure it round-trips
 	s, err := c.loadSecret(p)
 	if err != nil {
-		glog.Fatalf("unable to load secret immmediately after creation %v: %v", p, err)
+		klog.Fatalf("unable to load secret immediately after creation %v: %v", p, err)
 		return nil, false, err
 	}
 	return s, true, nil
@@ -159,7 +188,7 @@ func (c *VFSSecretStore) ReplaceSecret(id string, secret *fi.Secret) (*fi.Secret
 		return nil, err
 	}
 
-	err = c.createSecret(secret, p, acl, true)
+	err = createSecret(secret, p, acl, true)
 	if err != nil {
 		return nil, fmt.Errorf("unable to write secret: %v", err)
 	}
@@ -167,7 +196,7 @@ func (c *VFSSecretStore) ReplaceSecret(id string, secret *fi.Secret) (*fi.Secret
 	// Confirm the secret exists
 	s, err := c.loadSecret(p)
 	if err != nil {
-		return nil, fmt.Errorf("unable to load secret immmediately after creation %v: %v", p, err)
+		return nil, fmt.Errorf("unable to load secret immediately after creation %v: %v", p, err)
 	}
 	return s, nil
 }
@@ -188,14 +217,15 @@ func (c *VFSSecretStore) loadSecret(p vfs.Path) (*fi.Secret, error) {
 }
 
 // createSecret will create the Secret, overwriting an existing secret if replace is true
-func (c *VFSSecretStore) createSecret(s *fi.Secret, p vfs.Path, acl vfs.ACL, replace bool) error {
+func createSecret(s *fi.Secret, p vfs.Path, acl vfs.ACL, replace bool) error {
 	data, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("error serializing secret: %v", err)
 	}
 
+	rs := bytes.NewReader(data)
 	if replace {
-		return p.WriteFile(data, acl)
+		return p.WriteFile(rs, acl)
 	}
-	return p.CreateFile(data, acl)
+	return p.CreateFile(rs, acl)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ package fi
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strconv"
 	"strings"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
 
 // This file parses /etc/passwd and /etc/group to get information about users & groups
@@ -42,7 +42,7 @@ func parseUsers() (map[string]*User, error) {
 	users := make(map[string]*User)
 
 	path := "/etc/passwd"
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("error reading user file %q", path)
 	}
@@ -54,18 +54,18 @@ func parseUsers() (map[string]*User, error) {
 		tokens := strings.Split(line, ":")
 
 		if len(tokens) < 7 {
-			glog.Warning("Ignoring malformed /etc/passwd line (too few tokens): %q", line)
+			klog.Warningf("Ignoring malformed /etc/passwd line (too few tokens): %q\n", line)
 			continue
 		}
 
 		uid, err := strconv.Atoi(tokens[2])
 		if err != nil {
-			glog.Warning("Ignoring malformed /etc/passwd line (bad uid): %q", line)
+			klog.Warningf("Ignoring malformed /etc/passwd line (bad uid): %q", line)
 			continue
 		}
 		gid, err := strconv.Atoi(tokens[3])
 		if err != nil {
-			glog.Warning("Ignoring malformed /etc/passwd line (bad gid): %q", line)
+			klog.Warningf("Ignoring malformed /etc/passwd line (bad gid): %q", line)
 			continue
 		}
 
@@ -91,7 +91,7 @@ func LookupUser(name string) (*User, error) {
 	return users[name], nil
 }
 
-func LookupUserById(uid int) (*User, error) {
+func LookupUserByID(uid int) (*User, error) {
 	users, err := parseUsers()
 	if err != nil {
 		return nil, fmt.Errorf("error reading users: %v", err)
@@ -107,14 +107,14 @@ func LookupUserById(uid int) (*User, error) {
 type Group struct {
 	Name string
 	Gid  int
-	//Members []string
+	// Members []string
 }
 
 func parseGroups() (map[string]*Group, error) {
 	groups := make(map[string]*Group)
 
 	path := "/etc/group"
-	b, err := ioutil.ReadFile(path)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("error reading group file %q", path)
 	}
@@ -126,13 +126,13 @@ func parseGroups() (map[string]*Group, error) {
 		tokens := strings.Split(line, ":")
 
 		if len(tokens) < 4 {
-			glog.Warning("Ignoring malformed /etc/group line (too few tokens): %q", line)
+			klog.Warningf("Ignoring malformed /etc/group line (too few tokens): %q", line)
 			continue
 		}
 
 		gid, err := strconv.Atoi(tokens[2])
 		if err != nil {
-			glog.Warning("Ignoring malformed /etc/group line (bad gid): %q", line)
+			klog.Warningf("Ignoring malformed /etc/group line (bad gid): %q", line)
 			continue
 		}
 
@@ -155,7 +155,7 @@ func LookupGroup(name string) (*Group, error) {
 	return groups[name], nil
 }
 
-func LookupGroupById(gid int) (*Group, error) {
+func LookupGroupByID(gid int) (*Group, error) {
 	users, err := parseGroups()
 	if err != nil {
 		return nil, fmt.Errorf("error reading groups: %v", err)

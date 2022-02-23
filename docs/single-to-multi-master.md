@@ -1,238 +1,128 @@
 # Migrating from single to multi-master
 
-This document describes how to go from a single-master cluster (created by kops)
-to a multi-master cluster.
+Switching from a single-master to a multi-maser Kubernetes cluster is an entirely graceful procedure when using etcd-manager.
+If you are still using legacy etcd, you need to migrate to etcd-manager first.
 
-## Warnings
+## Create instance groups
 
-This is a risky procedure that **can lead to data-loss** in the etcd cluster.
-Please follow all the backup steps before attempting it. Please read the
-[etcd admin guide](https://github.com/coreos/etcd/blob/v2.2.1/Documentation/admin_guide.md)
-before attempting it.
+### Create new subnets
 
-During this procedure, you will experience **downtime** on the API server, but
-not on the end user services. During this downtime, existing pods will continue
-to work, but you will not be able to create new pods and any existing pod that
-dies will not be restarted.
+Start out by deciding which availability zones you want to deploy the masters to. You can only have one master per availability zone.
 
-## 1 - Backups
-
-### a - Backup main etcd cluster
+Then you need to add new subnets for your availability zones. Which subnets you need to add depend on which topology you have chosen. Simplest is to copy the sections you already have. Make sure that you add additional subnets per type. E.g if you have a `private` and a `utility` subnet, you need to copy both.
 
 ```bash
-$ kubectl --namespace=kube-system get pods | grep etcd
-etcd-server-events-ip-172-20-36-161.ec2.internal        1/1       Running   4          2h
-etcd-server-ip-172-20-36-161.ec2.internal               1/1       Running   4          2h
-$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -it -- sh
-/ # etcdctl backup --data-dir /var/etcd/data --backup-dir /var/etcd/backup
-/ # mv /var/etcd/backup/ /var/etcd/data/
-/ # exit
-$ kubectl --namespace=kube-system get pod etcd-server-ip-172-20-36-161.ec2.internal -o json | jq '.spec.volumes[] | select(.name | contains("varetcdata")) | .hostPath.path'
-"/mnt/master-vol-0ea119c15602cbb57/var/etcd/data"
-$ ssh admin@<master-node>
-admin@ip-172-20-36-161:~$ sudo -i
-root@ip-172-20-36-161:~# mv /mnt/master-vol-0ea119c15602cbb57/var/etcd/data/backup /home/admin/
-root@ip-172-20-36-161:~# chown -R admin: /home/admin/backup/
-root@ip-172-20-36-161:~# exit
-admin@ip-172-20-36-161:~$ exit
-$ scp -r admin@<master-node>:backup/ .
+kops get cluster -o yaml > mycluster.yaml
 ```
 
-### b - Backup event etcd cluster
+Change the subnet section to look something like this:
+```yaml
+  - cidr: 172.20.32.0/19
+    name: eu-west-1a
+    type: Private
+    zone: eu-west-1a
+  - cidr: 172.20.64.0/19
+    name: eu-west-1b
+    type: Private
+    zone: eu-west-1b
+  - cidr: 172.20.96.0/19
+    name: eu-west-1c
+    type: Private
+    zone: eu-west-1c
+  - cidr: 172.20.0.0/22
+    name: utility-eu-west-1a
+    type: Utility
+    zone: eu-west-1a
+  - cidr: 172.20.4.0/22
+    name: utility-eu-west-1b
+    type: Utility
+    zone: eu-west-1b
+  - cidr: 172.20.8.0/22
+    name: utility-eu-west-1c
+    type: Utility
+    zone: eu-west-1c
+```
+
+### Create new master instance groups
+
+The next step is creating two new instance groups for the new masters. 
 
 ```bash
-$ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -it -- sh
-/ # etcdctl backup --data-dir /var/etcd/data-events --backup-dir /var/etcd/backup
-/ # mv /var/etcd/backup/ /var/etcd/data-events/
-/ # exit
-$ kubectl --namespace=kube-system get pod etcd-server-events-ip-172-20-36-161.ec2.internal -o json | jq '.spec.volumes[] | select(.name | contains("varetcdata")) | .hostPath.path'
-"/mnt/master-vol-0bb5ad222911c6777/var/etcd/data-events"
-$ ssh admin@<master-node>
-admin@ip-172-20-36-161:~$ sudo -i
-root@ip-172-20-36-161:~# mv /mnt/master-vol-0bb5ad222911c6777/var/etcd/data-events/backup/ /home/admin/backup-events
-root@ip-172-20-36-161:~# chown -R admin: /home/admin/backup-events/
-root@ip-172-20-36-161:~# exit
-admin@ip-172-20-36-161:~$ exit
-$ scp -r admin@<master-node>:backup-events/ .
+kops create instancegroup master-<subnet name> --subnet <subnet name> --role Master
 ```
 
-## 2 - Create instance groups
-
-### a - Create new master instance group
-
-Create 1 kops instance group for the first one of your new masters, in
-a different AZ from the existing one.
+Example:
 
 ```bash
-$ kops create instancegroup master-<availability-zone2> --subnet <availability-zone2> --role Master
+kops create ig master-us-west-1d --subnet us-west-1d --role Master
 ```
 
- * ``maxSize`` and ``minSize`` should be 1,
- * only one zone should be listed.
+This command will bring up an editor with the default values. Ensure that:
 
-### b - Create third master instance group
+ * `maxSize` and `minSize` is 1
+ * only one zone is listed
+ * you have the correct image and machine type
 
-Instance group for the third master, in a different AZ from the existing one, is
-also required. However, real EC2 instance is not required until the second master launches.
+### Reference the new masters in your cluster configuration
+
+Bring up `mycluster.yaml` again to add etcd members to each of new masters.
 
 ```bash
-$ kops create instancegroup master-<availability-zone3> --subnet <availability-zone3> --role Master
+$EDITOR mycluster.yaml
 ```
 
- * ``maxSize`` and ``minSize`` should be **0**,
- * only one zone should be listed.
-
-### c - Reference the new masters in your cluster configuration
-
-*kops will refuse to have only 2 members in the etcd clusters, so we have to
-reference a third one, even if we have not created it yet.*
-
-```bash
-$ kops edit cluster example.com
-```
-
- * In ``.spec.etcdClusters`` 2 new members in each cluster, one for each new
+ * In `.spec.etcdClusters` add 2 new members in each cluster, one for each new
  availability zone.
 
 ```yaml
     - instanceGroup: master-<availability-zone2>
-      name: <availability-zone2>
+      name: <availability-zone2-name>
     - instanceGroup: master-<availability-zone3>
-      name: <availability-zone3>
+      name: <availability-zone3-name>
 ```
 
-## 3 - Add a new master
+Example:
 
-### a - Add a new member to the etcd clusters
+```yaml
+etcdClusters:
+  - etcdMembers:
+    - instanceGroup: master-eu-west-1a
+      name: a
+    - instanceGroup: master-eu-west-1b
+      name: b
+    - instanceGroup: master-eu-west-1c
+      name: c
+    name: main
+  - etcdMembers:
+    - instanceGroup: master-eu-west-1a
+      name: a
+    - instanceGroup: master-eu-west-1b
+      name: b
+    - instanceGroup: master-eu-west-1c
+      name: c
+    name: events
+```
 
-**The clusters will stop to work until the new member is started**.
+### Update Cluster to launch new masters
+
+Update the cluster spec and apply the config by running the following:
 
 ```bash
-$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone2> http://etcd-<availability-zone2>.internal.example.com:2380
-$ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone2> http://etcd-events-<availability-zone2>.internal.example.com:2381
+kops replace -f mycluster.yaml
+kops update cluster example.com
+kops update cluster example.com --yes
 ```
 
-### b - Launch the new master
+This will launch the two new masters. You will also need to roll the old master so that it can join the new etcd cluster.
+
+After about 5 minutes all three masters should have found each other. Run the following to ensure everything is running as expected.
 
 ```bash
-$ kops update cluster example.com --yes
-# wait for the new master to boot and initialize
-$ ssh admin@<new-master>
-admin@ip-172-20-116-230:~$ sudo -i
-root@ip-172-20-116-230:~# systemctl stop kubelet
-root@ip-172-20-116-230:~# systemctl stop protokube
+kops validate cluster --wait 10m
 ```
 
-Reinitialize the etcd instances:
-* In both ``/etc/kubernetes/manifests/etcd-events.manifest`` and
-``/etc/kubernetes/manifests/etcd.manifest``, edit the
-``ETCD_INITIAL_CLUSTER_STATE`` variable to ``existing``.
-* In the same files, remove the third non-existing member from
-``ETCD_INITIAL_CLUSTER``.
-* Delete the containers and the data directories:
+While rotating the original master is not strictly necessary, kOps will say it needs updating because of the configuration change.
 
-```bash
-root@ip-172-20-116-230:~# docker stop $(docker ps | grep "etcd:2.2.1" | awk '{print $1}')
-root@ip-172-20-116-230:~# rm -r /mnt/master-vol-03b97b1249caf379a/var/etcd/data-events/member/
-root@ip-172-20-116-230:~# rm -r /mnt/master-vol-0dbfd1f3c60b8c509/var/etcd/data/member/
 ```
-
-Launch them again:
-
-```bash
-root@ip-172-20-116-230:~# systemctl start kubelet
+kops rolling-update cluster --yes
 ```
-
-At this point, both etcd clusters should be healthy with two members:
-
-```bash
-$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member list
-$ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl cluster-health
-$ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member list
-$ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 cluster-health
-```
-
-If not, check ``/var/log/etcd.log`` for problems.
-
-Restart protokube on the new master:
-
-```bash
-root@ip-172-20-116-230:~# systemctl start protokube
-```
-
-## 4 - Add the third master
-
-### a - Edit instance group
-
-Prepare to launch the third master instance:
-
-```bash
-$ kops edit instancegroup master-<availability-zone3>
-```
-
-* Replace ``maxSize`` and ``minSize`` values to **1**.
-
-### b - Add a new member to the etcd clusters
-
- ```bash
- $ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member add etcd-<availability-zone3> http://etcd-<availability-zone3>.internal.example.com:2380
- $ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member add etcd-events-<availability-zone3> http://etcd-events-<availability-zone3>.internal.example.com:2381
- ```
-
-### c - Launch the third master
-
- ```bash
- $ kops update cluster example.com --yes
- # wait for the third master to boot and initialize
- $ ssh admin@<third-master>
- admin@ip-172-20-139-130:~$ sudo -i
- root@ip-172-20-139-130:~# systemctl stop kubelet
- root@ip-172-20-139-130:~# systemctl stop protokube
- ```
-
- Reinitialize the etcd instances:
- * In both ``/etc/kubernetes/manifests/etcd-events.manifest`` and
- ``/etc/kubernetes/manifests/etcd.manifest``, edit the
- ``ETCD_INITIAL_CLUSTER_STATE`` variable to ``existing``.
- * Delete the containers and the data directories:
-
- ```bash
- root@ip-172-20-139-130:~# docker stop $(docker ps | grep "etcd:2.2.1" | awk '{print $1}')
- root@ip-172-20-139-130:~# rm -r /mnt/master-vol-019796c3511a91b4f//var/etcd/data-events/member/
- root@ip-172-20-139-130:~# rm -r /mnt/master-vol-0c89fd6f6a256b686/var/etcd/data/member/
- ```
-
- Launch them again:
-
- ```bash
- root@ip-172-20-139-130:~# systemctl start kubelet
- ```
-
- At this point, both etcd clusters should be healthy with three members:
-
- ```bash
- $ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl member list
- $ kubectl --namespace=kube-system exec etcd-server-ip-172-20-36-161.ec2.internal -- etcdctl cluster-health
- $ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 member list
- $ kubectl --namespace=kube-system exec etcd-server-events-ip-172-20-36-161.ec2.internal -- etcdctl --endpoint http://127.0.0.1:4002 cluster-health
- ```
-
- If not, check ``/var/log/etcd.log`` for problems.
-
- Restart protokube on the third master:
-
- ```bash
- root@ip-172-20-139-130:~# systemctl start protokube
- ```
-
-## 5 - Cleanup
-
-To be sure that everything runs smoothly and is setup correctly, it is advised
-to terminate the masters one after the other (always keeping 2 of them up and
-running). They will be restarted with a clean config and should join the others
-without any problems.
-
-While optional, this last step allows you to be sure that your masters are
-fully configured by Kops and that there is no residual manual configuration.
-If there is any configuration problem, they will be detected during this step
-and not during a future upgrade or, worse, during a master failure.

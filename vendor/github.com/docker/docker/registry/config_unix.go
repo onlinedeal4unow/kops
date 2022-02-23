@@ -1,15 +1,26 @@
 // +build !windows
 
-package registry
+package registry // import "github.com/docker/docker/registry"
 
 import (
-	"github.com/spf13/pflag"
+	"path/filepath"
+
+	"github.com/docker/docker/pkg/homedir"
+	"github.com/docker/docker/rootless"
 )
 
-var (
-	// CertsDir is the directory where certificates are stored
-	CertsDir = "/etc/docker/certs.d"
-)
+// CertsDir is the directory where certificates are stored
+func CertsDir() string {
+	d := "/etc/docker/certs.d"
+
+	if rootless.RunningWithRootlessKit() {
+		configHome, err := homedir.GetConfigHome()
+		if err == nil {
+			d = filepath.Join(configHome, "docker/certs.d")
+		}
+	}
+	return d
+}
 
 // cleanPath is used to ensure that a directory name is valid on the target
 // platform. It will be passed in something *similar* to a URL such as
@@ -17,9 +28,4 @@ var (
 // which contain those characters (such as : on Windows)
 func cleanPath(s string) string {
 	return s
-}
-
-// installCliPlatformFlags handles any platform specific flags for the service.
-func (options *ServiceOptions) installCliPlatformFlags(flags *pflag.FlagSet) {
-	flags.BoolVar(&options.V2Only, "disable-legacy-registry", true, "Disable contacting legacy registries")
 }

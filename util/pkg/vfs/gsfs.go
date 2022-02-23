@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,9 +18,10 @@ package vfs
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
@@ -29,11 +30,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang/glog"
-	"golang.org/x/net/context"
 	"google.golang.org/api/googleapi"
 	storage "google.golang.org/api/storage/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/klog/v2"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 	"k8s.io/kops/util/pkg/hashing"
 )
 
@@ -45,8 +46,11 @@ type GSPath struct {
 	md5Hash string
 }
 
-var _ Path = &GSPath{}
-var _ HasHash = &GSPath{}
+var (
+	_ Path          = &GSPath{}
+	_ TerraformPath = &GSPath{}
+	_ HasHash       = &GSPath{}
+)
 
 // gcsReadBackoff is the backoff strategy for GCS read retries
 var gcsReadBackoff = wait.Backoff{
@@ -59,6 +63,15 @@ var gcsReadBackoff = wait.Backoff{
 // GSAcl is an ACL implementation for objects on Google Cloud Storage
 type GSAcl struct {
 	Acl []*storage.ObjectAccessControl
+}
+
+func (a *GSAcl) String() string {
+	var s []string
+	for _, acl := range a.Acl {
+		s = append(s, fmt.Sprintf("%+v", acl))
+	}
+
+	return "{" + strings.Join(s, ", ") + "}"
 }
 
 var _ ACL = &GSAcl{}
@@ -103,6 +116,15 @@ func (p *GSPath) String() string {
 	return p.Path()
 }
 
+// TerraformProvider returns the provider name and necessary arguments
+func (p *GSPath) TerraformProvider() (*TerraformProvider, error) {
+	provider := &TerraformProvider{
+		Name:      "google",
+		Arguments: map[string]string{}, // GCS doesn't need the project and region specified
+	}
+	return provider, nil
+}
+
 func (p *GSPath) Remove() error {
 	done, err := RetryWithBackoff(gcsWriteBackoff, func() (bool, error) {
 		err := p.client.Objects.Delete(p.bucket, p.key).Do()
@@ -124,6 +146,10 @@ func (p *GSPath) Remove() error {
 	}
 }
 
+func (p *GSPath) RemoveAllVersions() error {
+	return p.Remove()
+}
+
 func (p *GSPath) Join(relativePath ...string) Path {
 	args := []string{p.key}
 	args = append(args, relativePath...)
@@ -135,30 +161,34 @@ func (p *GSPath) Join(relativePath ...string) Path {
 	}
 }
 
-func (p *GSPath) WriteFile(data []byte, acl ACL) error {
+func (p *GSPath) WriteFile(data io.ReadSeeker, acl ACL) error {
+	md5Hash, err := hashing.HashAlgorithmMD5.Hash(data)
+	if err != nil {
+		return err
+	}
+
 	done, err := RetryWithBackoff(gcsWriteBackoff, func() (bool, error) {
-		glog.V(4).Infof("Writing file %q", p)
-
-		md5Hash, err := hashing.HashAlgorithmMD5.Hash(bytes.NewReader(data))
-		if err != nil {
-			return false, err
-		}
-
 		obj := &storage.Object{
 			Name:    p.key,
 			Md5Hash: base64.StdEncoding.EncodeToString(md5Hash.HashValue),
 		}
 
 		if acl != nil {
-			gsAcl, ok := acl.(*GSAcl)
+			gsACL, ok := acl.(*GSAcl)
 			if !ok {
 				return true, fmt.Errorf("write to %s with ACL of unexpected type %T", p, acl)
 			}
-			obj.Acl = gsAcl.Acl
+			obj.Acl = gsACL.Acl
+			klog.V(4).Infof("Writing file %q with ACL %v", p, gsACL)
+		} else {
+			klog.V(4).Infof("Writing file %q", p)
 		}
 
-		r := bytes.NewReader(data)
-		_, err = p.client.Objects.Insert(p.bucket, obj).Media(r).Do()
+		if _, err := data.Seek(0, 0); err != nil {
+			return false, fmt.Errorf("error seeking to start of data stream for write to %s: %v", p, err)
+		}
+
+		_, err = p.client.Objects.Insert(p.bucket, obj).Media(data).Do()
 		if err != nil {
 			return false, fmt.Errorf("error writing %s: %v", p, err)
 		}
@@ -181,7 +211,7 @@ func (p *GSPath) WriteFile(data []byte, acl ACL) error {
 // TODO: should we enable versioning?
 var createFileLockGCS sync.Mutex
 
-func (p *GSPath) CreateFile(data []byte, acl ACL) error {
+func (p *GSPath) CreateFile(data io.ReadSeeker, acl ACL) error {
 	createFileLockGCS.Lock()
 	defer createFileLockGCS.Unlock()
 
@@ -200,37 +230,47 @@ func (p *GSPath) CreateFile(data []byte, acl ACL) error {
 
 // ReadFile implements Path::ReadFile
 func (p *GSPath) ReadFile() ([]byte, error) {
-	var ret []byte
+	var b bytes.Buffer
 	done, err := RetryWithBackoff(gcsReadBackoff, func() (bool, error) {
-		glog.V(4).Infof("Reading file %q", p)
-
-		response, err := p.client.Objects.Get(p.bucket, p.key).Download()
+		b.Reset()
+		_, err := p.WriteTo(&b)
 		if err != nil {
-			if isGCSNotFound(err) {
-				return true, os.ErrNotExist
+			if os.IsNotExist(err) {
+				// Not recoverable
+				return true, err
 			}
-			return false, fmt.Errorf("error reading %s: %v", p, err)
+			return false, err
 		}
-		if response == nil {
-			return false, fmt.Errorf("no response returned from reading %s", p)
-		}
-		defer response.Body.Close()
-
-		data, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			return false, fmt.Errorf("error reading %s: %v", p, err)
-		}
-		ret = data
+		// Success!
 		return true, nil
 	})
 	if err != nil {
 		return nil, err
 	} else if done {
-		return ret, nil
+		return b.Bytes(), nil
 	} else {
 		// Shouldn't happen - we always return a non-nil error with false
 		return nil, wait.ErrWaitTimeout
 	}
+}
+
+// WriteTo implements io.WriterTo::WriteTo
+func (p *GSPath) WriteTo(out io.Writer) (int64, error) {
+	klog.V(4).Infof("Reading file %q", p)
+
+	response, err := p.client.Objects.Get(p.bucket, p.key).Download()
+	if err != nil {
+		if isGCSNotFound(err) {
+			return 0, os.ErrNotExist
+		}
+		return 0, fmt.Errorf("error reading %s: %v", p, err)
+	}
+	if response == nil {
+		return 0, fmt.Errorf("no response returned from reading %s", p)
+	}
+	defer response.Body.Close()
+
+	return io.Copy(out, response.Body)
 }
 
 // ReadDir implements Path::ReadDir
@@ -262,7 +302,7 @@ func (p *GSPath) ReadDir() ([]Path, error) {
 			}
 			return false, fmt.Errorf("error listing %s: %v", p, err)
 		}
-		glog.V(8).Infof("Listed files in %v: %v", p, paths)
+		klog.V(8).Infof("Listed files in %v: %v", p, paths)
 		ret = paths
 		return true, nil
 	})
@@ -338,12 +378,65 @@ func (p *GSPath) Hash(a hashing.HashAlgorithm) (*hashing.Hash, error) {
 		return nil, nil
 	}
 
-	md5Bytes, err := hex.DecodeString(md5)
+	md5Bytes, err := base64.StdEncoding.DecodeString(md5)
 	if err != nil {
 		return nil, fmt.Errorf("Etag was not a valid MD5 sum: %q", md5)
 	}
 
 	return &hashing.Hash{Algorithm: hashing.HashAlgorithmMD5, HashValue: md5Bytes}, nil
+}
+
+type terraformGSObject struct {
+	Bucket   string                   `json:"bucket" cty:"bucket"`
+	Name     string                   `json:"name" cty:"name"`
+	Source   string                   `json:"source" cty:"source"`
+	Provider *terraformWriter.Literal `json:"provider,omitempty" cty:"provider"`
+}
+
+type terraformGSObjectAccessControl struct {
+	Bucket     string                   `json:"bucket" cty:"bucket"`
+	Object     *terraformWriter.Literal `json:"object" cty:"object"`
+	RoleEntity []string                 `json:"role_entity" cty:"role_entity"`
+	Provider   *terraformWriter.Literal `json:"provider,omitempty" cty:"provider"`
+}
+
+func (p *GSPath) RenderTerraform(w *terraformWriter.TerraformWriter, name string, data io.Reader, acl ACL) error {
+	bytes, err := ioutil.ReadAll(data)
+	if err != nil {
+		return fmt.Errorf("reading data: %v", err)
+	}
+
+	content, err := w.AddFileBytes("google_storage_bucket_object", name, "content", bytes, false)
+	if err != nil {
+		return fmt.Errorf("rendering GCS file: %v", err)
+	}
+
+	tf := &terraformGSObject{
+		Bucket:   p.Bucket(),
+		Name:     p.Object(),
+		Source:   content.FnArgs[0],
+		Provider: terraformWriter.LiteralTokens("google", "files"),
+	}
+	err = w.RenderResource("google_storage_bucket_object", name, tf)
+	if err != nil {
+		return err
+	}
+
+	tfACL := &terraformGSObjectAccessControl{
+		Bucket:     p.Bucket(),
+		Object:     p.TerraformLink(name),
+		RoleEntity: make([]string, 0),
+		Provider:   terraformWriter.LiteralTokens("google", "files"),
+	}
+	for _, re := range acl.(GSAcl).Acl {
+		// https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/storage_object_acl#role_entity
+		tfACL.RoleEntity = append(tfACL.RoleEntity, fmt.Sprintf("%v:%v", re.Role, re.Entity))
+	}
+	return w.RenderResource("google_storage_object_access_control", name, tfACL)
+}
+
+func (s *GSPath) TerraformLink(name string) *terraformWriter.Literal {
+	return terraformWriter.LiteralProperty("google_storage_bucket_object", name, "output_name")
 }
 
 func isGCSNotFound(err error) bool {

@@ -17,15 +17,15 @@ limitations under the License.
 package fitasks
 
 import (
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/util/pkg/vfs"
 )
 
-//go:generate fitask -type=MirrorKeystore
+// +kops:fitask
 type MirrorKeystore struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	MirrorPath vfs.Path
 }
@@ -52,7 +52,7 @@ func (e *MirrorKeystore) Find(c *fi.Context) (*MirrorKeystore, error) {
 	}
 
 	// TODO: implement Find so that we aren't always mirroring
-	glog.V(2).Infof("MirrorKeystore::Find not implemented; always copying (inefficient)")
+	klog.V(2).Infof("MirrorKeystore::Find not implemented; always copying (inefficient)")
 	return nil, nil
 }
 

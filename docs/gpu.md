@@ -1,74 +1,52 @@
-# GPU support
+# GPU Support
 
-```
-kops create cluster gpu.example.com --zones us-east-1c --node-size p2.xlarge --node-count 1 --kubernetes-version 1.6.1
-```
+## kOps managed device driver
 
-(Note that the p2.xlarge instance type is not cheap, but no GPU instances are)
+{{ kops_feature_table(kops_added_default='1.22') }}
 
-You can use the experimental hooks feature to install the nvidia drivers:
+kOps can install nvidia device drivers, plugin, and runtime, as well as configure containerd to make use of the runtime.
 
-`> kops edit cluster gpu.example.com`
-```
-spec:
-...
-  hooks:
-  - execContainer:
-      image: kopeio/nvidia-bootstrap:1.6
-```
+kOps will also install a RuntimeClass `nvidia`. As the nvidia runtime is not the default runtime, you will need to add `runtimeClassName: nvidia` to any Pod spec you want to use for GPU workloads. The RuntimeClass also configures the appropriate node selectors and tolerations to run on GPU Nodes.
 
-(TODO: Only on instance groups, or have nvidia-bootstrap detect if GPUs are present..)
+kOps will add `kops.k8s.io/gpu="1"` as node selector as well as the following taint:
 
-In addition, you will likely want to set the `Accelerators=true` feature-flag to kubelet:
-
-`> kops edit cluster gpu.example.com`
-```
-spec:
-...
-  kubelet:
-    featureGates:
-      Accelerators: "true"
+```yaml
+  taints:
+  - effect: NoSchedule
+    key: nvidia.com/gpu
 ```
 
-`> kops update cluster gpu.example.com --yes`
+The taint will prevent you from accidentially scheduling workloads on GPU Nodes.
 
+You can enable nvidia by adding the following to your Cluster spec:
 
-Here is an example pod that runs tensorflow; note that it mounts libcuda from the host:
-
-(TODO: Is there some way to have a well-known volume or similar?)
-
+```yaml
+  containerd:
+    nvidiaGPU:
+      enabled: true
 ```
-apiVersion: v1
-kind: Pod
+
+## Creating an instance group with GPU nodeN
+
+Due to the cost of GPU instances you want to minimize the amount of pods running on them. Therefore start by provisioning a regular cluster following the [getting started documentation](https://kops.sigs.k8s.io/getting_started/aws/).
+
+Once the cluster is running, add an instance group with GPUs:
+
+```yaml
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
 metadata:
-  name: tf
+  labels:
+    kops.k8s.io/cluster: <cluster name>
+  name: gpu-nodes
 spec:
-  containers:
-  - image: gcr.io/tensorflow/tensorflow:1.0.1-gpu
-    imagePullPolicy: IfNotPresent
-    name: gpu
-    command:
-    - /bin/bash
-    - -c
-    - "cp -d /rootfs/usr/lib/x86_64-linux-gnu/libcuda.* /usr/lib/x86_64-linux-gnu/ && cp -d /rootfs/usr/lib/x86_64-linux-gnu/libnvidia* /usr/lib/x86_64-linux-gnu/ &&/run_jupyter.sh"
-    resources:
-      limits:
-        cpu: 2000m
-        alpha.kubernetes.io/nvidia-gpu: 1
-    volumeMounts:
-    - name: rootfs-usr-lib
-      mountPath: /rootfs/usr/lib
-  volumes:
-    - name: rootfs-usr-lib
-      hostPath:
-        path: /usr/lib
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20200907
+  nodeLabels:
+    kops.k8s.io/instancegroup: gpu-nodes
+  machineType: g4dn.xlarge
+  maxSize: 1
+  minSize: 1
+  role: Node
+  subnets:
+  - eu-central-1c
 ```
-
-To use this particular tensorflow image, you should port-forward and get the URL from the log:
-
-```
-kubectl port-forward tf 8888 &
-kubectl logs tf
-```
-
-And browse to the URL printed

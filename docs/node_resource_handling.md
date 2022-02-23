@@ -1,4 +1,4 @@
-## Node Resource Handling In Kuberenetes
+## Node Resource Handling In Kubernetes
 
 An aspect of Kubernetes clusters that is often overlooked is the resources non-
 pod components require to run, such as:
@@ -37,7 +37,7 @@ nodes as possible.
 ---------------------------
 ```
 
-Node resources can be be categorised into 4 (as shown above):
+Node resources can be categorised into 4 (as shown above):
 
 * `kube-reserved` – reserves resources for kubernetes system daemons.
 * `system-reserved` – reserves resources for operating system components.
@@ -71,7 +71,7 @@ scheduled does not surpass the sum of allocatable resources. But suppose you
 have a couple of applications deployed in your cluster that are constantly using
 up way more resources set in their resource requests (burst above requests but
 below limits during workload). You end up with a node with pods that are each
-attempting to take take up more resources than there are available on the node!
+attempting to take up more resources than there are available on the node!
 
 This is particularly an issue with non-compressible resources like memory. For
 example, in the aforementioned case, with an eviction threshold of only
@@ -81,7 +81,7 @@ able to reclaim memory (because it may not observe memory pressure right away,
 since it polls `cAdvisor` to collect memory usage stats at a regular interval).
 
 All the while, keep in mind that without `kube-reserved` nor `system-reserved`
-reservations set (which is most clusters i.e. [GKE][5], [Kops][6]), the
+reservations set (which is most clusters i.e. [GKE][5], [kOps][6]), the
 scheduler doesn't account for resources that non-pod components would require to
 function properly because `Capacity` and `Allocatable` resources are more or
 less equal.
@@ -109,7 +109,7 @@ But, it seems fitting to recommend the following:
    bursting at the same time.
 4. Increase eviction thresholds if they are too low - while extreme utilization
    is ideal, it might be too close to the edge such that the system doesn't have
-   enought time to reclaim resources via evictions if the resource increases
+   enough time to reclaim resources via evictions if the resource increases
    within that window rapidly.
 5. Reserve resources for system components once you've been able to profile your
    nodes i.e. `kube-reserved` and `system-reserved`.
@@ -128,4 +128,4 @@ But, it seems fitting to recommend the following:
 [5]: https://cloud.google.com/container-engine/
 [6]: https://github.com/kubernetes/kops
 [7]: http://node-perf-dash.k8s.io/#/builds
-[8]: http://blog.kubernetes.io/2016/11/visualize-kubelet-performance-with-node-dashboard.html
+[8]: http://kubernetes.io/blog/2016/11/visualize-kubelet-performance-with-node-dashboard.html

@@ -17,16 +17,15 @@ limitations under the License.
 package mesh
 
 import (
-	"github.com/golang/glog"
 	"github.com/weaveworks/mesh"
+	"k8s.io/klog/v2"
 )
 
 // glogLogger sends mesh log messages to glog
-type glogLogger struct {
-}
+type glogLogger struct{}
 
 var _ mesh.Logger = &glogLogger{}
 
 func (g *glogLogger) Printf(format string, args ...interface{}) {
-	glog.Infof(format, args...)
+	klog.Infof(format, args...)
 }

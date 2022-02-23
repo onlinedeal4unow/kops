@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,17 +21,18 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=RouteTableAssociation
+// +kops:fitask
 type RouteTableAssociation struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	ID         *string
 	RouteTable *RouteTable
@@ -78,7 +79,7 @@ func (e *RouteTableAssociation) Find(c *fi.Context) (*RouteTableAssociation, err
 			RouteTable: &RouteTable{ID: rta.RouteTableId},
 			Subnet:     &Subnet{ID: rta.SubnetId},
 		}
-		glog.V(2).Infof("found matching RouteTableAssociation %q", *actual.ID)
+		klog.V(2).Infof("found matching RouteTableAssociation %q", *actual.ID)
 		e.ID = actual.ID
 
 		// Prevent spurious changes
@@ -146,7 +147,7 @@ func (_ *RouteTableAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *
 	if a == nil {
 		// TODO: We might do better just to make the subnet the primary key here
 
-		glog.V(2).Infof("Checking for existing RouteTableAssociation to subnet")
+		klog.V(2).Infof("Checking for existing RouteTableAssociation to subnet")
 		existing, err := findExistingRouteTableForSubnet(t.Cloud, e.Subnet)
 		if err != nil {
 			return fmt.Errorf("error checking for existing RouteTableAssociation: %v", err)
@@ -157,7 +158,7 @@ func (_ *RouteTableAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *
 				if aws.StringValue(a.SubnetId) != aws.StringValue(e.Subnet.ID) {
 					continue
 				}
-				glog.V(2).Infof("Creating RouteTableAssociation")
+				klog.V(2).Infof("Creating RouteTableAssociation")
 				request := &ec2.DisassociateRouteTableInput{
 					AssociationId: a.RouteTableAssociationId,
 				}
@@ -169,7 +170,7 @@ func (_ *RouteTableAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *
 			}
 		}
 
-		glog.V(2).Infof("Creating RouteTableAssociation")
+		klog.V(2).Infof("Creating RouteTableAssociation")
 		request := &ec2.AssociateRouteTableInput{
 			SubnetId:     e.Subnet.ID,
 			RouteTableId: e.RouteTable.ID,
@@ -187,8 +188,8 @@ func (_ *RouteTableAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *
 }
 
 type terraformRouteTableAssociation struct {
-	SubnetID     *terraform.Literal `json:"subnet_id"`
-	RouteTableID *terraform.Literal `json:"route_table_id"`
+	SubnetID     *terraformWriter.Literal `cty:"subnet_id"`
+	RouteTableID *terraformWriter.Literal `cty:"route_table_id"`
 }
 
 func (_ *RouteTableAssociation) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *RouteTableAssociation) error {
@@ -200,8 +201,8 @@ func (_ *RouteTableAssociation) RenderTerraform(t *terraform.TerraformTarget, a,
 	return t.RenderResource("aws_route_table_association", *e.Name, tf)
 }
 
-func (e *RouteTableAssociation) TerraformLink() *terraform.Literal {
-	return terraform.LiteralSelfLink("aws_route_table_association", *e.Name)
+func (e *RouteTableAssociation) TerraformLink() *terraformWriter.Literal {
+	return terraformWriter.LiteralSelfLink("aws_route_table_association", *e.Name)
 }
 
 type cloudformationRouteTableAssociation struct {

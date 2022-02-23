@@ -19,7 +19,7 @@ package formatter
 import (
 	"strings"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/model"
 )
@@ -27,19 +27,19 @@ import (
 // InstanceGroupRenderFunction is a render function for an InstanceGroup
 type InstanceGroupRenderFunction func(ig *kops.InstanceGroup) string
 
-//RenderInstanceGroupSubnets renders the subnet names for an InstanceGroup
+// RenderInstanceGroupSubnets renders the subnet names for an InstanceGroup
 func RenderInstanceGroupSubnets(cluster *kops.Cluster) InstanceGroupRenderFunction {
 	return func(ig *kops.InstanceGroup) string {
 		return strings.Join(ig.Spec.Subnets, ",")
 	}
 }
 
-//RenderInstanceGroupZones renders the zone names for an InstanceGroup
+// RenderInstanceGroupZones renders the zone names for an InstanceGroup
 func RenderInstanceGroupZones(cluster *kops.Cluster) InstanceGroupRenderFunction {
 	return func(ig *kops.InstanceGroup) string {
 		zones, err := model.FindZonesForInstanceGroup(cluster, ig)
 		if err != nil {
-			glog.Warningf("error fetching zones for instancegroup: %v", err)
+			klog.Warningf("error fetching zones for instancegroup: %v", err)
 			return ""
 		}
 		return strings.Join(zones, ",")

@@ -17,17 +17,19 @@ limitations under the License.
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"strings"
 
-	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/registry"
 	"k8s.io/kops/pkg/apis/kops/validation"
 	kopsinternalversion "k8s.io/kops/pkg/client/clientset_generated/clientset/typed/kops/internalversion"
+	"k8s.io/kops/pkg/client/simple"
 	"k8s.io/kops/pkg/client/simple/vfsclientset"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/secrets"
@@ -41,21 +43,28 @@ type RESTClientset struct {
 }
 
 // GetCluster implements the GetCluster method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) GetCluster(name string) (*kops.Cluster, error) {
+func (c *RESTClientset) GetCluster(ctx context.Context, name string) (*kops.Cluster, error) {
 	namespace := restNamespaceForClusterName(name)
-	return c.KopsClient.Clusters(namespace).Get(name, metav1.GetOptions{})
+	return c.KopsClient.Clusters(namespace).Get(ctx, name, metav1.GetOptions{})
+}
+
+// AddonsFor fetches the AddonsClient for the cluster
+func (c *RESTClientset) AddonsFor(cluster *kops.Cluster) simple.AddonsClient {
+	// We should manage these directly in the cluster
+	klog.Fatalf("AddonsFor not implemented for RESTClientset")
+	return nil
 }
 
 // CreateCluster implements the CreateCluster method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) CreateCluster(cluster *kops.Cluster) (*kops.Cluster, error) {
+func (c *RESTClientset) CreateCluster(ctx context.Context, cluster *kops.Cluster) (*kops.Cluster, error) {
 	namespace := restNamespaceForClusterName(cluster.Name)
-	return c.KopsClient.Clusters(namespace).Create(cluster)
+	return c.KopsClient.Clusters(namespace).Create(ctx, cluster, metav1.CreateOptions{})
 }
 
 // UpdateCluster implements the UpdateCluster method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) UpdateCluster(cluster *kops.Cluster, status *kops.ClusterStatus) (*kops.Cluster, error) {
-	glog.Warningf("validating cluster update client side; needs to move to server")
-	old, err := c.GetCluster(cluster.Name)
+func (c *RESTClientset) UpdateCluster(ctx context.Context, cluster *kops.Cluster, status *kops.ClusterStatus) (*kops.Cluster, error) {
+	klog.Warningf("validating cluster update client side; needs to move to server")
+	old, err := c.GetCluster(ctx, cluster.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +73,7 @@ func (c *RESTClientset) UpdateCluster(cluster *kops.Cluster, status *kops.Cluste
 	}
 
 	namespace := restNamespaceForClusterName(cluster.Name)
-	return c.KopsClient.Clusters(namespace).Update(cluster)
+	return c.KopsClient.Clusters(namespace).Update(ctx, cluster, metav1.UpdateOptions{})
 }
 
 // ConfigBaseFor implements the ConfigBaseFor method of Clientset for a kubernetes-API state store
@@ -72,39 +81,20 @@ func (c *RESTClientset) ConfigBaseFor(cluster *kops.Cluster) (vfs.Path, error) {
 	if cluster.Spec.ConfigBase != "" {
 		return vfs.Context.BuildVfsPath(cluster.Spec.ConfigBase)
 	}
-	// URL for clusters looks like  https://<server>/apis/kops/v1alpha2/namespaces/<cluster>/clusters/<cluster>
+	// URL for clusters looks like https://<server>/apis/kops/v1alpha2/namespaces/<cluster>/clusters/<cluster>
 	// We probably want to add a subresource for full resources
 	return vfs.Context.BuildVfsPath(c.BaseURL.String())
 }
 
 // ListClusters implements the ListClusters method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) ListClusters(options metav1.ListOptions) (*kops.ClusterList, error) {
-	return c.KopsClient.Clusters(metav1.NamespaceAll).List(options)
+func (c *RESTClientset) ListClusters(ctx context.Context, options metav1.ListOptions) (*kops.ClusterList, error) {
+	return c.KopsClient.Clusters(metav1.NamespaceAll).List(ctx, options)
 }
 
 // InstanceGroupsFor implements the InstanceGroupsFor method of Clientset for a kubernetes-API state store
 func (c *RESTClientset) InstanceGroupsFor(cluster *kops.Cluster) kopsinternalversion.InstanceGroupInterface {
 	namespace := restNamespaceForClusterName(cluster.Name)
 	return c.KopsClient.InstanceGroups(namespace)
-}
-
-// FederationsFor implements the FederationsFor method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) FederationsFor(federation *kops.Federation) kopsinternalversion.FederationInterface {
-	// Unsure if this should be namespaced or not - probably, so that we can RBAC it...
-	panic("Federations are currently not supported by the server API")
-	//namespace := restNamespaceForFederationName(federation.Name)
-	//return c.KopsClient.Federations(namespace)
-}
-
-// ListFederations implements the ListFederations method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) ListFederations(options metav1.ListOptions) (*kops.FederationList, error) {
-	return c.KopsClient.Federations(metav1.NamespaceAll).List(options)
-}
-
-// GetFederation implements the GetFederation method of Clientset for a kubernetes-API state store
-func (c *RESTClientset) GetFederation(name string) (*kops.Federation, error) {
-	namespace := restNamespaceForFederationName(name)
-	return c.KopsClient.Federations(namespace).Get(name, metav1.GetOptions{})
 }
 
 func (c *RESTClientset) SecretStore(cluster *kops.Cluster) (fi.SecretStore, error) {
@@ -117,7 +107,12 @@ func (c *RESTClientset) KeyStore(cluster *kops.Cluster) (fi.CAStore, error) {
 	return fi.NewClientsetCAStore(cluster, c.KopsClient, namespace), nil
 }
 
-func (c *RESTClientset) DeleteCluster(cluster *kops.Cluster) error {
+func (c *RESTClientset) SSHCredentialStore(cluster *kops.Cluster) (fi.SSHCredentialStore, error) {
+	namespace := restNamespaceForClusterName(cluster.Name)
+	return fi.NewClientsetSSHCredentialStore(cluster, c.KopsClient, namespace), nil
+}
+
+func (c *RESTClientset) DeleteCluster(ctx context.Context, cluster *kops.Cluster) error {
 	configBase, err := registry.ConfigBase(cluster)
 	if err != nil {
 		return err
@@ -132,18 +127,18 @@ func (c *RESTClientset) DeleteCluster(cluster *kops.Cluster) error {
 	namespace := restNamespaceForClusterName(name)
 
 	{
-		keysets, err := c.KopsClient.Keysets(namespace).List(metav1.ListOptions{})
+		keysets, err := c.KopsClient.Keysets(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return fmt.Errorf("error listing Keysets: %v", err)
 		}
 
 		for i := range keysets.Items {
 			keyset := &keysets.Items[i]
-			err = c.KopsClient.Keysets(namespace).Delete(keyset.Name, &metav1.DeleteOptions{})
+			err = c.KopsClient.Keysets(namespace).Delete(ctx, keyset.Name, metav1.DeleteOptions{})
 			if err != nil {
 				if errors.IsNotFound(err) {
 					// Unlikely...
-					glog.Warningf("Keyset was concurrently deleted")
+					klog.Warningf("Keyset was concurrently deleted")
 				} else {
 					return fmt.Errorf("error deleting Keyset %q: %v", keyset.Name, err)
 				}
@@ -152,18 +147,18 @@ func (c *RESTClientset) DeleteCluster(cluster *kops.Cluster) error {
 	}
 
 	{
-		igs, err := c.KopsClient.InstanceGroups(namespace).List(metav1.ListOptions{})
+		igs, err := c.KopsClient.InstanceGroups(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
 			return fmt.Errorf("error listing instance groups: %v", err)
 		}
 
 		for i := range igs.Items {
 			ig := &igs.Items[i]
-			err = c.KopsClient.InstanceGroups(namespace).Delete(ig.Name, &metav1.DeleteOptions{})
+			err = c.KopsClient.InstanceGroups(namespace).Delete(ctx, ig.Name, metav1.DeleteOptions{})
 			if err != nil {
 				if errors.IsNotFound(err) {
 					// Unlikely...
-					glog.Warningf("instance group was concurrently deleted")
+					klog.Warningf("instance group was concurrently deleted")
 				} else {
 					return fmt.Errorf("error deleting instance group %q: %v", ig.Name, err)
 				}
@@ -171,11 +166,11 @@ func (c *RESTClientset) DeleteCluster(cluster *kops.Cluster) error {
 		}
 	}
 
-	err = c.KopsClient.Clusters(namespace).Delete(name, &metav1.DeleteOptions{})
+	err = c.KopsClient.Clusters(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Unlikely...
-			glog.Warningf("cluster %q was concurrently deleted", name)
+			klog.Warningf("cluster %q was concurrently deleted", name)
 		} else {
 			return fmt.Errorf("error deleting cluster%q: %v", name, err)
 		}
@@ -188,11 +183,6 @@ func restNamespaceForClusterName(clusterName string) string {
 	// We are not allowed dots, so we map them to dashes
 	// This can conflict, but this will simply be a limitation that we pass on to the user
 	// i.e. it will not be possible to create a.b.example.com and a-b.example.com
-	namespace := strings.Replace(clusterName, ".", "-", -1)
-	return namespace
-}
-
-func restNamespaceForFederationName(clusterName string) string {
 	namespace := strings.Replace(clusterName, ".", "-", -1)
 	return namespace
 }

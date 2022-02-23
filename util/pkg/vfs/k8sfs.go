@@ -17,7 +17,9 @@ limitations under the License.
 package vfs
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 
@@ -32,8 +34,10 @@ type KubernetesPath struct {
 	key        string
 }
 
-var _ Path = &KubernetesPath{}
-var _ HasHash = &KubernetesPath{}
+var (
+	_ Path    = &KubernetesPath{}
+	_ HasHash = &KubernetesPath{}
+)
 
 func newKubernetesPath(k8sContext *KubernetesContext, host string, key string) *KubernetesPath {
 	host = strings.TrimSuffix(host, "/")
@@ -66,6 +70,10 @@ func (p *KubernetesPath) Remove() error {
 	return fmt.Errorf("KubernetesPath::Remove not supported")
 }
 
+func (p *KubernetesPath) RemoveAllVersions() error {
+	return p.Remove()
+}
+
 func (p *KubernetesPath) Join(relativePath ...string) Path {
 	args := []string{p.key}
 	args = append(args, relativePath...)
@@ -77,16 +85,27 @@ func (p *KubernetesPath) Join(relativePath ...string) Path {
 	}
 }
 
-func (p *KubernetesPath) WriteFile(data []byte, acl ACL) error {
+func (p *KubernetesPath) WriteFile(data io.ReadSeeker, acl ACL) error {
 	return fmt.Errorf("KubernetesPath::WriteFile not supported")
 }
 
-func (p *KubernetesPath) CreateFile(data []byte, acl ACL) error {
+func (p *KubernetesPath) CreateFile(data io.ReadSeeker, acl ACL) error {
 	return fmt.Errorf("KubernetesPath::CreateFile not supported")
 }
 
+// ReadFile implements Path::ReadFile
 func (p *KubernetesPath) ReadFile() ([]byte, error) {
-	return nil, fmt.Errorf("KubernetesPath::ReadFile not supported")
+	var b bytes.Buffer
+	_, err := p.WriteTo(&b)
+	if err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+// WriteTo implements io.WriterTo
+func (p *KubernetesPath) WriteTo(out io.Writer) (int64, error) {
+	return 0, fmt.Errorf("KubernetesPath::WriteTo not supported")
 }
 
 func (p *KubernetesPath) ReadDir() ([]Path, error) {

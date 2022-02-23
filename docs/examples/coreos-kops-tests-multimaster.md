@@ -1,6 +1,6 @@
 # USING KOPS WITH COREOS - A MULTI-MASTER/MULTI-NODE PRACTICAL EXAMPLE
 
-## WHAT WE WANT TO ACOMPLISH HERE?
+## WHAT WE WANT TO ACCOMPLISH HERE?
 
 The exercise described in this document will focus on the following goals:
 
@@ -47,22 +47,22 @@ export KOPS_STATE_STORE=s3://my-kops-s3-bucket-for-cluster-state
 Some things to note from here:
 
 - "NAME" will be an environment variable that we'll use from now in order to refer to our cluster name. For this practical exercise, our cluster name is "coreosbasedkopscluster.k8s.local".
-- Because we'll use gossip DNS instead of a valid DNS domain on AWS ROUTE53 service, our cluster name need to include the string **".k8s.local"** at the end (this is covered on our AWS tutorials). You can see more about this on our [Getting Started Doc.](https://github.com/kubernetes/kops/blob/master/docs/aws.md)
+- Because we'll use gossip DNS instead of a valid DNS domain on AWS ROUTE53 service, our cluster name needs to include the string **".k8s.local"** at the end (this is covered on our AWS tutorials). You can see more about this on our [Getting Started Doc.](../getting_started/aws.md)
 
 
 ## COREOS IMAGE INFORMATION:
 
-CoreOS webpage includes a "json" with the updated list of lattest images: [https://coreos.com/dist/aws/aws-stable.json](https://coreos.com/dist/aws/aws-stable.json)
+CoreOS webpage includes a "json" with the updated list of latest images: [https://coreos.com/dist/aws/aws-stable.json](https://coreos.com/dist/aws/aws-stable.json)
 
-By using "jq" you can obtain the "ami" for a specific region (change the region "-" for "_" in the following command):
+By using "jq" you can obtain the "ami" for a specific region
 
 
 ```bash
-curl -s https://coreos.com/dist/aws/aws-stable.json|sed -r 's/-/_/g'|jq '.us_east_1.hvm'|sed -r 's/_/-/g'
+curl -s https://coreos.com/dist/aws/aws-stable.json | jq -r '.["us-east-1"].hvm'
 "ami-32705b49"
 ```
 
-The last command will check the all "hvm" CoreOS images on us-east-1 region (us_east_1 for our command). Please, always use "hvm" images.
+The last command will check the all "hvm" CoreOS images on us-east-1 region. Please, always use "hvm" images.
 
 At the moment we created this document, our ami was: "ami-32705b49". More info about the image can be obtained by using the following "aws-cli" command:
 
@@ -111,7 +111,7 @@ aws ec2 describe-images --image-id ami-32705b49 --output table
 ||+----------------------------------+---------------------------------+||
 ```
 
-Also, you can obtaing the image owner/name using the following aws-cli command:
+Also, you can obtain the image owner/name using the following aws-cli command:
 
 ```bash
 aws ec2 describe-images --region=us-east-1 --owner=595879546273 \
@@ -119,7 +119,7 @@ aws ec2 describe-images --region=us-east-1 --owner=595879546273 \
     --query 'sort_by(Images,&CreationDate)[-1].{id:ImageLocation}' \
 	--output table
 
-	
+
 ---------------------------------------------------
 |                 DescribeImages                  |
 +----+--------------------------------------------+
@@ -187,7 +187,7 @@ Your cluster coreosbasedkopscluster.k8s.local is ready
 
 ```
 
-Before continuing, let's note something interesting here: Can you see your masters ?. Two of them (master-us-east-1a and master-us-east-1c) are using "m3.medium" "aws instance type", but "master-us-east-1b" is using "c4.large". This happens because KOPS uses the AWS API in order to determine if the required instance type is available on the "az". At the moment we launched this cluster, "m3.medium" was unavailable on "us-east-1b". This forced KOPS to choose the nearest instance type candidate on the AZ.
+Before continuing, let's note something interesting here: Can you see your masters? Two of them (master-us-east-1a and master-us-east-1c) are using "m3.medium" "aws instance type", but "master-us-east-1b" is using "c4.large". This happens because KOPS uses the AWS API in order to determine if the required instance type is available on the "az". At the moment we launched this cluster, "m3.medium" was unavailable on "us-east-1b". This forced KOPS to choose the nearest instance type candidate on the AZ.
 
 If you don't want KOPS to auto-select the instance type, you can use the following arguments in order to enforce the instance types for both masters and nodes:
 
@@ -196,7 +196,7 @@ If you don't want KOPS to auto-select the instance type, you can use the followi
 
 But, before doing that, always ensure the instance types are available on your desired AZ.
 
-NOTE: More arguments and kops commands are described on the following document: [commands.md](https://github.com/kubernetes/kops/blob/master/docs/commands.md)
+NOTE: More arguments and kOps commands are described [here](../cli/kops.md).
 
 Let's continue exploring our cluster, but now with "kubectl":
 
@@ -273,7 +273,7 @@ curl http://54.210.119.98
 curl http://34.200.247.63
 <html><body><h1>It works!</h1></body></html>
 
-``` 
+```
 
 **NOTE:** If you are replicating this exercise in a production environment, use a "real" load balancer in order to expose your replicated services. We are here just testing things so we really don't care right now about that, but, if you are doing this for a "real" production environment, either use an AWS ELB service, or an nginx ingress controller as described in our documentation: [NGINX Based ingress controller](https://github.com/kubernetes/kops/tree/master/addons/ingress-nginx).
 

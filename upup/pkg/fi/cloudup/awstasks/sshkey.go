@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,35 +17,33 @@ limitations under the License.
 package awstasks
 
 import (
-	"bytes"
-	"crypto"
-	"crypto/md5"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/base64"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
-	"golang.org/x/crypto/ssh"
+	"k8s.io/klog/v2"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
+
+	"k8s.io/kops/pkg/pki"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
-	"k8s.io/kops/upup/pkg/fi/utils"
 )
 
-//go:generate fitask -type=SSHKey
+// +kops:fitask
 type SSHKey struct {
+	ID        *string
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
+	Shared    bool
 
-	PublicKey *fi.ResourceHolder
+	PublicKey fi.Resource
 
 	KeyFingerprint *string
+
+	Tags map[string]string
 }
 
 var _ fi.CompareWithID = &SSHKey{}
@@ -84,131 +82,55 @@ func (e *SSHKey) find(cloud awsup.AWSCloud) (*SSHKey, error) {
 	}
 
 	k := response.KeyPairs[0]
-
 	actual := &SSHKey{
+		ID:             k.KeyPairId,
 		Name:           k.KeyName,
 		KeyFingerprint: k.KeyFingerprint,
+		Tags:           mapEC2TagsToMap(k.Tags),
+		Shared:         e.Shared,
 	}
 
 	// Avoid spurious changes
 	if fi.StringValue(actual.KeyFingerprint) == fi.StringValue(e.KeyFingerprint) {
-		glog.V(2).Infof("SSH key fingerprints match; assuming public keys match")
+		klog.V(2).Infof("SSH key fingerprints match; assuming public keys match")
 		actual.PublicKey = e.PublicKey
 	} else {
-		glog.V(2).Infof("Computed SSH key fingerprint mismatch: %q %q", fi.StringValue(e.KeyFingerprint), fi.StringValue(actual.KeyFingerprint))
+		klog.V(2).Infof("Computed SSH key fingerprint mismatch: %q %q", fi.StringValue(e.KeyFingerprint), fi.StringValue(actual.KeyFingerprint))
 	}
 	actual.Lifecycle = e.Lifecycle
-
+	if actual.Shared {
+		// Don't report tag changes on shared keys
+		actual.Tags = e.Tags
+	}
 	return actual, nil
-}
-
-// parseSSHPublicKey parses the SSH public key string
-func parseSSHPublicKey(publicKey string) (ssh.PublicKey, error) {
-	tokens := strings.Fields(publicKey)
-	if len(tokens) < 2 {
-		return nil, fmt.Errorf("error parsing SSH public key: %q", publicKey)
-	}
-
-	sshPublicKeyBytes, err := base64.StdEncoding.DecodeString(tokens[1])
-	if err != nil {
-		return nil, fmt.Errorf("error decoding SSH public key: %q err: %s", publicKey, err)
-	}
-	if len(tokens) < 2 {
-		return nil, fmt.Errorf("error decoding SSH public key: %q", publicKey)
-	}
-
-	sshPublicKey, err := ssh.ParsePublicKey(sshPublicKeyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("error parsing SSH public key: %v", err)
-	}
-	return sshPublicKey, nil
-}
-
-// colonSeparatedHex formats the byte slice SSH-fingerprint style: hex bytes separated by colons
-func colonSeparatedHex(data []byte) string {
-	sshKeyFingerprint := fmt.Sprintf("%x", data)
-	var colonSeparated bytes.Buffer
-	for i := 0; i < len(sshKeyFingerprint); i++ {
-		if (i%2) == 0 && i != 0 {
-			colonSeparated.WriteByte(':')
-		}
-		colonSeparated.WriteByte(sshKeyFingerprint[i])
-	}
-
-	return colonSeparated.String()
-}
-
-// computeAWSKeyFingerprint computes the AWS-specific fingerprint of the SSH public key
-func computeAWSKeyFingerprint(publicKey string) (string, error) {
-	sshPublicKey, err := parseSSHPublicKey(publicKey)
-	if err != nil {
-		return "", err
-	}
-
-	der, err := toDER(sshPublicKey)
-	if err != nil {
-		return "", fmt.Errorf("error computing fingerprint for SSH public key: %v", err)
-	}
-	h := md5.Sum(der)
-
-	return colonSeparatedHex(h[:]), nil
-}
-
-// ComputeOpenSSHKeyFingerprint computes the OpenSSH fingerprint of the SSH public key
-func ComputeOpenSSHKeyFingerprint(publicKey string) (string, error) {
-	sshPublicKey, err := parseSSHPublicKey(publicKey)
-	if err != nil {
-		return "", err
-	}
-
-	h := md5.Sum(sshPublicKey.Marshal())
-	return colonSeparatedHex(h[:]), nil
-}
-
-// toDER gets the DER encoding of the SSH public key
-// Annoyingly, the ssh code wraps the actual crypto keys, so we have to use reflection tricks
-func toDER(pubkey ssh.PublicKey) ([]byte, error) {
-	pubkeyValue := reflect.ValueOf(pubkey)
-	typeName := utils.BuildTypeName(pubkeyValue.Type())
-
-	var cryptoKey crypto.PublicKey
-	switch typeName {
-	case "*rsaPublicKey":
-		var rsaPublicKey *rsa.PublicKey
-		targetType := reflect.ValueOf(rsaPublicKey).Type()
-		rsaPublicKey = pubkeyValue.Convert(targetType).Interface().(*rsa.PublicKey)
-		cryptoKey = rsaPublicKey
-
-	//case "*dsaPublicKey":
-	//	var dsaPublicKey *dsa.PublicKey
-	//	targetType := reflect.ValueOf(dsaPublicKey).Type()
-	//	dsaPublicKey = pubkeyValue.Convert(targetType).Interface().(*dsa.PublicKey)
-	//	cryptoKey = dsaPublicKey
-
-	default:
-		return nil, fmt.Errorf("Unexpected type of SSH key (%q); AWS can only import RSA keys", typeName)
-	}
-
-	der, err := x509.MarshalPKIXPublicKey(cryptoKey)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling SSH public key: %v", err)
-	}
-	return der, nil
 }
 
 func (e *SSHKey) Run(c *fi.Context) error {
 	if e.KeyFingerprint == nil && e.PublicKey != nil {
-		publicKey, err := e.PublicKey.AsString()
+		publicKey, err := fi.ResourceAsString(e.PublicKey)
 		if err != nil {
 			return fmt.Errorf("error reading SSH public key: %v", err)
 		}
 
-		keyFingerprint, err := computeAWSKeyFingerprint(publicKey)
+		keyFingerprint, err := pki.ComputeAWSKeyFingerprint(publicKey)
 		if err != nil {
 			return fmt.Errorf("error computing key fingerprint for SSH key: %v", err)
 		}
-		glog.V(2).Infof("Computed SSH key fingerprint as %q", keyFingerprint)
+		klog.V(2).Infof("Computed SSH key fingerprint as %q", keyFingerprint)
 		e.KeyFingerprint = &keyFingerprint
+	}
+	a, err := e.Find(c)
+	if err != nil {
+		return err
+	}
+	if e.IsExistingKey() && *e.Name != "" {
+		if a == nil {
+			return fmt.Errorf("unable to find specified SSH key %q", *e.Name)
+		}
+		e.KeyFingerprint = a.KeyFingerprint
+	}
+	if a != nil {
+		e.ID = a.ID
 	}
 	return fi.DefaultDeltaRunMethod(e, c)
 }
@@ -223,14 +145,15 @@ func (s *SSHKey) CheckChanges(a, e, changes *SSHKey) error {
 }
 
 func (e *SSHKey) createKeypair(cloud awsup.AWSCloud) error {
-	glog.V(2).Infof("Creating SSHKey with Name:%q", *e.Name)
+	klog.V(2).Infof("Creating SSHKey with Name:%q", *e.Name)
 
 	request := &ec2.ImportKeyPairInput{
-		KeyName: e.Name,
+		KeyName:           e.Name,
+		TagSpecifications: awsup.EC2TagSpecification(ec2.ResourceTypeKeyPair, e.Tags),
 	}
 
 	if e.PublicKey != nil {
-		d, err := e.PublicKey.AsBytes()
+		d, err := fi.ResourceAsBytes(e.PublicKey)
 		if err != nil {
 			return fmt.Errorf("error rendering SSHKey PublicKey: %v", err)
 		}
@@ -243,6 +166,7 @@ func (e *SSHKey) createKeypair(cloud awsup.AWSCloud) error {
 	}
 
 	e.KeyFingerprint = response.KeyFingerprint
+	e.ID = response.KeyPairId
 
 	return nil
 }
@@ -252,18 +176,25 @@ func (_ *SSHKey) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *SSHKey) error {
 		return e.createKeypair(t.Cloud)
 	}
 
-	// No tags on SSH public key
-	return nil //return output.AddAWSTags(cloud.Tags(), v, "vpc")
+	if !e.Shared {
+		return t.AddAWSTags(*e.ID, e.Tags)
+	}
+	return nil
 }
 
 type terraformSSHKey struct {
-	Name      *string            `json:"key_name"`
-	PublicKey *terraform.Literal `json:"public_key"`
+	Name      *string                  `cty:"key_name"`
+	PublicKey *terraformWriter.Literal `cty:"public_key"`
+	Tags      map[string]string        `cty:"tags"`
 }
 
 func (_ *SSHKey) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *SSHKey) error {
+	// We don't want to render a key definition when we're using one that already exists
+	if e.IsExistingKey() {
+		return nil
+	}
 	tfName := strings.Replace(*e.Name, ":", "", -1)
-	publicKey, err := t.AddFile("aws_key_pair", tfName, "public_key", e.PublicKey)
+	publicKey, err := t.AddFileResource("aws_key_pair", tfName, "public_key", e.PublicKey, false)
 	if err != nil {
 		return fmt.Errorf("error rendering PublicKey: %v", err)
 	}
@@ -271,27 +202,44 @@ func (_ *SSHKey) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *SS
 	tf := &terraformSSHKey{
 		Name:      e.Name,
 		PublicKey: publicKey,
+		Tags:      e.Tags,
 	}
 
 	return t.RenderResource("aws_key_pair", tfName, tf)
 }
 
-func (e *SSHKey) TerraformLink() *terraform.Literal {
+// IsExistingKey will be true if the task has been initialized without using a public key
+// this is when we want to use a key that is already present in AWS.
+func (e *SSHKey) IsExistingKey() bool {
+	return e.PublicKey == nil
+}
+
+func (e *SSHKey) TerraformLink() *terraformWriter.Literal {
+	if e.NoSSHKey() {
+		return nil
+	}
+	if e.IsExistingKey() {
+		return terraformWriter.LiteralFromStringValue(*e.Name)
+	}
 	tfName := strings.Replace(*e.Name, ":", "", -1)
-	return terraform.LiteralProperty("aws_key_pair", tfName, "id")
+	return terraformWriter.LiteralProperty("aws_key_pair", tfName, "id")
 }
 
 func (_ *SSHKey) RenderCloudformation(t *cloudformation.CloudformationTarget, a, e, changes *SSHKey) error {
+	if e.NoSSHKey() {
+		return nil
+	}
+
 	cloud := t.Cloud.(awsup.AWSCloud)
 
-	glog.Warningf("Cloudformation does not manage SSH keys; pre-creating SSH key")
+	klog.Warningf("Cloudformation does not manage SSH keys; pre-creating SSH key")
 
-	a, err := e.find(cloud)
+	keypair, err := e.find(cloud)
 	if err != nil {
 		return err
 	}
 
-	if a == nil {
+	if keypair == nil {
 		err := e.createKeypair(cloud)
 		if err != nil {
 			return err
@@ -299,4 +247,8 @@ func (_ *SSHKey) RenderCloudformation(t *cloudformation.CloudformationTarget, a,
 	}
 
 	return nil
+}
+
+func (e *SSHKey) NoSSHKey() bool {
+	return e.ID == nil && e.Name == nil && e.PublicKey == nil && e.KeyFingerprint == nil
 }

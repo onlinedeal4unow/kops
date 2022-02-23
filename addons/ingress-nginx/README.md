@@ -1,9 +1,19 @@
 
+## Deployment
+### AWS
+```
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/ingress-nginx/v1.6.0.yaml
+```
+
+### GCE
+```
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/kops/master/addons/ingress-nginx/v1.6.0-gce.yaml
+```
 
 ## Creating a simple ingress
 
 ```
-kubectl run echoheaders --image=gcr.io/google_containers/echoserver:1.4 --replicas=1 --port=8080
+kubectl run echoheaders --image=k8s.gcr.io/echoserver:1.4 --replicas=1 --port=8080
 kubectl expose deployment echoheaders --port=80 --target-port=8080 --name=echoheaders-x
 kubectl expose deployment echoheaders --port=80 --target-port=8080 --name=echoheaders-y
 

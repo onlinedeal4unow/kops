@@ -4,6 +4,10 @@ object resources. An object is a resource that represents and contains data
 - such as documents, images, and so on. You can also store custom metadata
 with an object.
 
+Note: When referencing the Object Storage API docs, some of the API actions
+are listed under "containers" rather than "objects". This was an intentional
+design in Gophercloud to make some object actions feel more natural.
+
 Example to List Objects
 
 	containerName := "my_container"
@@ -94,6 +98,10 @@ Example to Download an Object's Data
 	containerName := "my_container"
 
 	object := objects.Download(objectStorageClient, containerName, objectName, nil)
+	if object.Err != nil {
+		panic(object.Err)
+	}
+	// if "ExtractContent" method is not called, the HTTP connection will remain consumed
 	content, err := object.ExtractContent()
 	if err != nil {
 		panic(err)

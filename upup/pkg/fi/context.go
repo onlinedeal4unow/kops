@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,16 +19,14 @@ package fi
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"reflect"
 	"strings"
-	"time"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/util/pkg/vfs"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
 )
 
 type Context struct {
@@ -67,7 +65,7 @@ func NewContext(target Target, cluster *kops.Cluster, cloud Cloud, keystore Keys
 		tasks:             tasks,
 	}
 
-	t, err := ioutil.TempDir("", "deploy")
+	t, err := os.MkdirTemp("", "deploy")
 	if err != nil {
 		return nil, fmt.Errorf("error creating temporary directory: %v", err)
 	}
@@ -80,19 +78,20 @@ func (c *Context) AllTasks() map[string]Task {
 	return c.tasks
 }
 
-func (c *Context) RunTasks(maxTaskDuration time.Duration) error {
+func (c *Context) RunTasks(options RunTasksOptions) error {
 	e := &executor{
 		context: c,
+		options: options,
 	}
-	return e.RunTasks(c.tasks, maxTaskDuration)
+	return e.RunTasks(c.tasks)
 }
 
 func (c *Context) Close() {
-	glog.V(2).Infof("deleting temp dir: %q", c.Tmpdir)
+	klog.V(2).Infof("deleting temp dir: %q", c.Tmpdir)
 	if c.Tmpdir != "" {
 		err := os.RemoveAll(c.Tmpdir)
 		if err != nil {
-			glog.Warningf("unable to delete temporary directory %q: %v", c.Tmpdir, err)
+			klog.Warningf("unable to delete temporary directory %q: %v", c.Tmpdir, err)
 		}
 	}
 }
@@ -102,7 +101,7 @@ func (c *Context) Close() {
 //}
 
 func (c *Context) NewTempDir(prefix string) (string, error) {
-	t, err := ioutil.TempDir(c.Tmpdir, prefix)
+	t, err := os.MkdirTemp(c.Tmpdir, prefix)
 	if err != nil {
 		return "", fmt.Errorf("error creating temporary directory: %v", err)
 	}
@@ -115,23 +114,23 @@ var typeContextPtr = reflect.TypeOf((*Context)(nil))
 // it is typically called after we have checked the existing state of the Task and determined that is different
 // from the desired state.
 func (c *Context) Render(a, e, changes Task) error {
-	var lifecycle *Lifecycle
+	var lifecycle Lifecycle
 	if hl, ok := e.(HasLifecycle); ok {
 		lifecycle = hl.GetLifecycle()
 	}
 
-	if lifecycle != nil {
+	if lifecycle != "" {
 		if reflect.ValueOf(a).IsNil() {
-
-			switch *lifecycle {
+			switch lifecycle {
 			case LifecycleExistsAndValidates:
-				return fmt.Errorf("Lifecycle set to ExistsAndValidates, but object was not found")
+				return fmt.Errorf("lifecycle set to ExistsAndValidates, but object was not found")
 			case LifecycleExistsAndWarnIfChanges:
-				return fmt.Errorf("Lifecycle set to ExistsAndWarnIfChanges, but object was not found")
+				return NewExistsAndWarnIfChangesError("Lifecycle set to ExistsAndWarnIfChanges and object was not found.")
 			}
 		} else {
-			switch *lifecycle {
+			switch lifecycle {
 			case LifecycleExistsAndValidates, LifecycleExistsAndWarnIfChanges:
+
 				out := os.Stderr
 				changeList, err := buildChangeList(a, e, changes)
 				if err != nil {
@@ -156,12 +155,11 @@ func (c *Context) Render(a, e, changes Task) error {
 				fmt.Fprintf(b, "\n")
 				b.WriteTo(out)
 
-				if *lifecycle == LifecycleExistsAndValidates {
-					return fmt.Errorf("Lifecycle set to ExistsAndValidates, but object did not match")
-				} else {
-					// Warn, but then we continue
-					return nil
+				if lifecycle == LifecycleExistsAndValidates {
+					return fmt.Errorf("lifecycle set to ExistsAndValidates, but object did not match")
 				}
+				// Warn, but then we continue
+				return nil
 			}
 		}
 	}
@@ -204,7 +202,12 @@ func (c *Context) Render(a, e, changes Task) error {
 		}
 		if match {
 			if renderer != nil {
-				return fmt.Errorf("Found multiple Render methods that could be invokved on %T", e)
+				if method.Name == "Render" {
+					continue
+				}
+				if renderer.Name != "Render" {
+					return fmt.Errorf("found multiple Render methods that could be involved on %T", e)
+				}
 			}
 			renderer = &method
 			rendererArgs = args
@@ -212,12 +215,12 @@ func (c *Context) Render(a, e, changes Task) error {
 
 	}
 	if renderer == nil {
-		return fmt.Errorf("Could not find Render method on type %T (target %T)", e, c.Target)
+		return fmt.Errorf("could not find Render method on type %T (target %T)", e, c.Target)
 	}
 	rendererArgs = append(rendererArgs, reflect.ValueOf(a))
 	rendererArgs = append(rendererArgs, reflect.ValueOf(e))
 	rendererArgs = append(rendererArgs, reflect.ValueOf(changes))
-	glog.V(11).Infof("Calling method %s on %T", renderer.Name, e)
+	klog.V(11).Infof("Calling method %s on %T", renderer.Name, e)
 	m := v.MethodByName(renderer.Name)
 	rv := m.Call(rendererArgs)
 	var rvErr error
@@ -237,5 +240,36 @@ func (c *Context) AddWarning(task Task, message string) {
 	// We don't actually do anything with these warnings yet, other than log them to glog below.
 	// In future we might produce a structured warning report.
 	c.warnings = append(c.warnings, warning)
-	glog.Warningf("warning during task %s: %s", task, message)
+	klog.Warningf("warning during task %s: %s", task, message)
 }
+
+// ExistsAndWarnIfChangesError is the custom error return for fi.LifecycleExistsAndWarnIfChanges.
+// This error is used when an object needs to fail validation, but let the user proceed with a warning.
+type ExistsAndWarnIfChangesError struct {
+	msg string
+}
+
+// NewExistsAndWarnIfChangesError is a builder for ExistsAndWarnIfChangesError.
+func NewExistsAndWarnIfChangesError(message string) *ExistsAndWarnIfChangesError {
+	return &ExistsAndWarnIfChangesError{
+		msg: message,
+	}
+}
+
+// ExistsAndWarnIfChangesError implementation of the error interface.
+func (e *ExistsAndWarnIfChangesError) Error() string { return e.msg }
+
+// TryAgainLaterError is the custom used when a task needs to fail validation with a message and try again later
+type TryAgainLaterError struct {
+	msg string
+}
+
+// NewTryAgainLaterError is a builder for TryAgainLaterError.
+func NewTryAgainLaterError(message string) *TryAgainLaterError {
+	return &TryAgainLaterError{
+		msg: message,
+	}
+}
+
+// TryAgainLaterError implementation of the error interface.
+func (e *TryAgainLaterError) Error() string { return e.msg }

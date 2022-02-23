@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,8 +24,9 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"github.com/golang/glog"
-	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/klog/v2"
+
+	"k8s.io/kops/util/pkg/reflectutils"
 )
 
 // Table renders tables to stdout
@@ -44,10 +45,8 @@ func (c *TableColumn) getFromValue(v reflect.Value) string {
 	fvs := c.Getter.Call(args)
 	fv := fvs[0]
 
-	return fi.ValueAsString(fv)
+	return reflectutils.ValueAsString(fv)
 }
-
-type getterFunction func(interface{}) string
 
 // AddColumn registers an available column for formatting
 func (t *Table) AddColumn(name string, getter interface{}) {
@@ -72,9 +71,11 @@ type funcSorter struct {
 func (f *funcSorter) Len() int {
 	return f.len
 }
+
 func (f *funcSorter) Less(i, j int) bool {
 	return f.less(i, j)
 }
+
 func (f *funcSorter) Swap(i, j int) {
 	f.swap(i, j)
 }
@@ -99,7 +100,7 @@ func (t *Table) findColumns(columnNames ...string) ([]*TableColumn, error) {
 func (t *Table) Render(items interface{}, out io.Writer, columnNames ...string) error {
 	itemsValue := reflect.ValueOf(items)
 	if itemsValue.Kind() != reflect.Slice {
-		glog.Fatal("unexpected kind for items: ", itemsValue.Kind())
+		klog.Fatal("unexpected kind for items: ", itemsValue.Kind())
 	}
 
 	columns, err := t.findColumns(columnNames...)

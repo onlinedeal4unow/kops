@@ -1,4 +1,4 @@
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: Cluster
 metadata:
   creationTimestamp: "2017-01-01T00:00:00Z"
@@ -26,13 +26,16 @@ spec:
     - instanceGroup: master-us-test-1c
       name: c
     name: events
+  iam: {}
+  kubelet:
+    anonymousAuth: false
   kubernetesApiAccess:
   - 0.0.0.0/0
-  kubernetesVersion: v1.4.12
+  kubernetesVersion: v1.21.0
   masterPublicName: api.ha.example.com
   networkCIDR: 172.20.0.0/16
   networking:
-    kubenet: {}
+    cni: {}
   nonMasqueradeCIDR: 100.64.0.0/10
   sshAccess:
   - 0.0.0.0/0
@@ -57,7 +60,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2017-01-01T00:00:00Z"
@@ -75,7 +78,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2017-01-01T00:00:00Z"
@@ -93,7 +96,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2017-01-01T00:00:00Z"
@@ -111,7 +114,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2017-01-01T00:00:00Z"

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,33 +17,120 @@ limitations under the License.
 package mockec2
 
 import (
+	"fmt"
+	"sync"
+
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ec2/ec2iface"
 )
 
 type MockEC2 struct {
-	addressNumber int
-	Addresses     []*ec2.Address
+	// Stub out interface
+	ec2iface.EC2API
 
-	RouteTables []*ec2.RouteTable
+	mutex sync.Mutex
+
+	addressNumber int
+	Addresses     map[string]*ec2.Address
+
+	RouteTables map[string]*ec2.RouteTable
+
+	DhcpOptions map[string]*ec2.DhcpOptions
 
 	Images []*ec2.Image
 
 	securityGroupNumber int
-	SecurityGroups      []*ec2.SecurityGroup
+	SecurityGroups      map[string]*ec2.SecurityGroup
+	SecurityGroupRules  map[string]*ec2.SecurityGroupRule
 
-	subnetNumber int
-	subnets      map[string]*subnetInfo
+	subnets map[string]*subnetInfo
 
-	volumeNumber int
-	Volumes      []*ec2.Volume
+	Volumes map[string]*ec2.Volume
 
-	KeyPairs []*ec2.KeyPairInfo
+	KeyPairs map[string]*ec2.KeyPairInfo
 
 	Tags []*ec2.TagDescription
 
-	vpcNumber int
-	Vpcs      map[string]*vpcInfo
+	Vpcs map[string]*vpcInfo
+
+	InternetGateways           map[string]*ec2.InternetGateway
+	EgressOnlyInternetGateways map[string]*ec2.EgressOnlyInternetGateway
+
+	launchTemplateNumber int
+	LaunchTemplates      map[string]*launchTemplateInfo
+
+	NatGateways map[string]*ec2.NatGateway
+
+	idsMutex sync.Mutex
+	ids      map[string]*idAllocator
 }
 
 var _ ec2iface.EC2API = &MockEC2{}
+
+func (m *MockEC2) All() map[string]interface{} {
+	all := make(map[string]interface{})
+
+	for _, o := range m.Addresses {
+		all[aws.StringValue(o.AllocationId)] = o
+	}
+	for id, o := range m.RouteTables {
+		all[id] = o
+	}
+	for id, o := range m.DhcpOptions {
+		all[id] = o
+	}
+	for _, o := range m.Images {
+		all[aws.StringValue(o.ImageId)] = o
+	}
+	for id, o := range m.SecurityGroups {
+		all[id] = o
+	}
+	for id, o := range m.subnets {
+		all[id] = &o.main
+	}
+	for id, o := range m.Volumes {
+		all[id] = o
+	}
+	for id, o := range m.KeyPairs {
+		all[id] = o
+	}
+	for id, o := range m.Vpcs {
+		all[id] = o
+	}
+	for id, o := range m.InternetGateways {
+		all[id] = o
+	}
+	for id, o := range m.EgressOnlyInternetGateways {
+		all[id] = o
+	}
+	for id, o := range m.LaunchTemplates {
+		all[id] = o
+	}
+	for id, o := range m.NatGateways {
+		all[id] = o
+	}
+
+	return all
+}
+
+type idAllocator struct {
+	NextId int
+}
+
+func (m *MockEC2) allocateId(prefix string) string {
+	m.idsMutex.Lock()
+	defer m.idsMutex.Unlock()
+
+	ids := m.ids[prefix]
+	if ids == nil {
+		if m.ids == nil {
+			m.ids = make(map[string]*idAllocator)
+		}
+		ids = &idAllocator{NextId: 1}
+		m.ids[prefix] = ids
+	}
+	id := ids.NextId
+	ids.NextId++
+	return fmt.Sprintf("%s-%d", prefix, id)
+}

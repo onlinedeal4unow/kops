@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,18 +21,23 @@ import (
 	"fmt"
 	"net"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
 
 func (m *MockEC2) AllocateAddressRequest(*ec2.AllocateAddressInput) (*request.Request, *ec2.AllocateAddressOutput) {
 	panic("Not implemented")
-	return nil, nil
 }
 
-func (m *MockEC2) AllocateAddress(request *ec2.AllocateAddressInput) (*ec2.AllocateAddressOutput, error) {
-	glog.Infof("AllocateAddress: %v", request)
+func (m *MockEC2) AllocateAddressWithContext(aws.Context, *ec2.AllocateAddressInput, ...request.Option) (*ec2.AllocateAddressOutput, error) {
+	panic("Not implemented")
+}
+
+func (m *MockEC2) AllocateAddressWithId(request *ec2.AllocateAddressInput, id string) (*ec2.AllocateAddressOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
 
 	m.addressNumber++
 	n := m.addressNumber
@@ -45,12 +50,23 @@ func (m *MockEC2) AllocateAddress(request *ec2.AllocateAddressInput) (*ec2.Alloc
 		binary.BigEndian.PutUint32(publicIP, v)
 	}
 
+	tags := tagSpecificationsToTags(request.TagSpecifications, ec2.ResourceTypeElasticIp)
 	address := &ec2.Address{
-		AllocationId: s(fmt.Sprintf("eip-%d", n)),
+		AllocationId: s(id),
 		Domain:       s("vpc"),
 		PublicIp:     s(publicIP.String()),
+		Tags:         tags,
 	}
-	m.Addresses = append(m.Addresses, address)
+	if request.Address != nil {
+		address.PublicIp = request.Address
+	}
+
+	if m.Addresses == nil {
+		m.Addresses = make(map[string]*ec2.Address)
+	}
+	m.Addresses[id] = address
+	m.addTags(id, tags...)
+
 	response := &ec2.AllocateAddressOutput{
 		AllocationId: address.AllocationId,
 		Domain:       address.Domain,
@@ -59,32 +75,49 @@ func (m *MockEC2) AllocateAddress(request *ec2.AllocateAddressInput) (*ec2.Alloc
 	return response, nil
 }
 
+func (m *MockEC2) AllocateAddress(request *ec2.AllocateAddressInput) (*ec2.AllocateAddressOutput, error) {
+	klog.Infof("AllocateAddress: %v", request)
+	id := m.allocateId("eipalloc")
+	return m.AllocateAddressWithId(request, id)
+}
+
 func (m *MockEC2) AssignPrivateIpAddressesRequest(*ec2.AssignPrivateIpAddressesInput) (*request.Request, *ec2.AssignPrivateIpAddressesOutput) {
 	panic("Not implemented")
-	return nil, nil
+}
+
+func (m *MockEC2) AssignPrivateIpAddressesWithContext(aws.Context, *ec2.AssignPrivateIpAddressesInput, ...request.Option) (*ec2.AssignPrivateIpAddressesOutput, error) {
+	panic("Not implemented")
 }
 
 func (m *MockEC2) AssignPrivateIpAddresses(*ec2.AssignPrivateIpAddressesInput) (*ec2.AssignPrivateIpAddressesOutput, error) {
 	panic("Not implemented")
-	return nil, nil
 }
 
 func (m *MockEC2) AssociateAddressRequest(*ec2.AssociateAddressInput) (*request.Request, *ec2.AssociateAddressOutput) {
 	panic("Not implemented")
-	return nil, nil
+}
+
+func (m *MockEC2) AssociateAddressWithContext(aws.Context, *ec2.AssociateAddressInput, ...request.Option) (*ec2.AssociateAddressOutput, error) {
+	panic("Not implemented")
 }
 
 func (m *MockEC2) AssociateAddress(*ec2.AssociateAddressInput) (*ec2.AssociateAddressOutput, error) {
 	panic("Not implemented")
-	return nil, nil
 }
 
 func (m *MockEC2) DescribeAddressesRequest(*ec2.DescribeAddressesInput) (*request.Request, *ec2.DescribeAddressesOutput) {
 	panic("Not implemented")
-	return nil, nil
 }
+
+func (m *MockEC2) DescribeAddressesWithContext(aws.Context, *ec2.DescribeAddressesInput, ...request.Option) (*ec2.DescribeAddressesOutput, error) {
+	panic("Not implemented")
+}
+
 func (m *MockEC2) DescribeAddresses(request *ec2.DescribeAddressesInput) (*ec2.DescribeAddressesOutput, error) {
-	glog.Infof("DescribeAddresses: %v", request)
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("DescribeAddresses: %v", request)
 
 	var addresses []*ec2.Address
 
@@ -126,6 +159,7 @@ func (m *MockEC2) DescribeAddresses(request *ec2.DescribeAddressesInput) (*ec2.D
 		}
 
 		copy := *address
+		copy.Tags = m.getTags(ec2.ResourceTypeElasticIp, *address.AllocationId)
 		addresses = append(addresses, &copy)
 	}
 
@@ -135,11 +169,27 @@ func (m *MockEC2) DescribeAddresses(request *ec2.DescribeAddressesInput) (*ec2.D
 
 	return response, nil
 }
+
 func (m *MockEC2) ReleaseAddressRequest(*ec2.ReleaseAddressInput) (*request.Request, *ec2.ReleaseAddressOutput) {
 	panic("Not implemented")
-	return nil, nil
 }
-func (m *MockEC2) ReleaseAddress(*ec2.ReleaseAddressInput) (*ec2.ReleaseAddressOutput, error) {
+
+func (m *MockEC2) ReleaseAddressWithContext(aws.Context, *ec2.ReleaseAddressInput, ...request.Option) (*ec2.ReleaseAddressOutput, error) {
 	panic("Not implemented")
-	return nil, nil
+}
+
+func (m *MockEC2) ReleaseAddress(request *ec2.ReleaseAddressInput) (*ec2.ReleaseAddressOutput, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	klog.Infof("ReleaseAddress: %v", request)
+
+	id := aws.StringValue(request.AllocationId)
+	o := m.Addresses[id]
+	if o == nil {
+		return nil, fmt.Errorf("Address %q not found", id)
+	}
+	delete(m.Addresses, id)
+
+	return &ec2.ReleaseAddressOutput{}, nil
 }

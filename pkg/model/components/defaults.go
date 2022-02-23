@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,11 +28,28 @@ type DefaultsOptionsBuilder struct {
 
 var _ loader.OptionsBuilder = &DefaultsOptionsBuilder{}
 
+// BuildOptions is responsible for cluster options
 func (b *DefaultsOptionsBuilder) BuildOptions(o interface{}) error {
 	options := o.(*kops.ClusterSpec)
 
 	if options.ClusterDNSDomain == "" {
 		options.ClusterDNSDomain = "cluster.local"
+	}
+
+	if options.ContainerRuntime == "" {
+		if b.Context.IsKubernetesLT("1.20") || options.Docker != nil {
+			options.ContainerRuntime = "docker"
+		} else {
+			options.ContainerRuntime = "containerd"
+		}
+	}
+
+	if options.ExternalDNS == nil {
+		options.ExternalDNS = &kops.ExternalDNSConfig{}
+	}
+
+	if options.ExternalDNS.Provider == "" {
+		options.ExternalDNS.Provider = kops.ExternalDNSProviderDNSController
 	}
 
 	return nil

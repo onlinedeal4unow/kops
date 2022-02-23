@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,37 +17,30 @@ limitations under the License.
 package bootstrap
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	"github.com/golang/glog"
-	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/kops/nodeup/pkg/distros"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
+	"k8s.io/kops/util/pkg/distributions"
 	"k8s.io/kops/util/pkg/vfs"
 )
 
 type Installation struct {
-	FSRoot          string
 	CacheDir        string
-	MaxTaskDuration time.Duration
+	RunTasksOptions fi.RunTasksOptions
 	Command         []string
 }
 
 func (i *Installation) Run() error {
-	distribution, err := distros.FindDistribution(i.FSRoot)
+	_, err := distributions.FindDistribution("/")
 	if err != nil {
 		return fmt.Errorf("error determining OS distribution: %v", err)
 	}
-
-	tags := sets.NewString()
-	tags.Insert(distribution.BuildTags()...)
 
 	tasks := make(map[string]fi.Task)
 
@@ -59,14 +52,14 @@ func (i *Installation) Run() error {
 	// If there is a package task, we need an update packages task
 	for _, t := range tasks {
 		if _, ok := t.(*nodetasks.Package); ok {
-			glog.Infof("Package task found; adding UpdatePackages task")
+			klog.Infof("Package task found; adding UpdatePackages task")
 			tasks["UpdatePackages"] = nodetasks.NewUpdatePackages()
 			break
 		}
 	}
 
 	if tasks["UpdatePackages"] == nil {
-		glog.Infof("No package task found; won't update packages")
+		klog.Infof("No package task found; won't update packages")
 	}
 
 	var configBase vfs.Path
@@ -76,7 +69,6 @@ func (i *Installation) Run() error {
 
 	target := &local.LocalTarget{
 		CacheDir: i.CacheDir,
-		Tags:     tags,
 	}
 
 	checkExisting := true
@@ -86,7 +78,7 @@ func (i *Installation) Run() error {
 	}
 	defer context.Close()
 
-	err = context.RunTasks(i.MaxTaskDuration)
+	err = context.RunTasks(i.RunTasksOptions)
 	if err != nil {
 		return fmt.Errorf("error running tasks: %v", err)
 	}
@@ -98,8 +90,77 @@ func (i *Installation) Run() error {
 
 	return nil
 }
+
 func (i *Installation) Build(c *fi.ModelBuilderContext) {
+	c.AddTask(i.buildEnvFile())
 	c.AddTask(i.buildSystemdJob())
+}
+
+func (i *Installation) buildEnvFile() *nodetasks.File {
+	envVars := make(map[string]string)
+
+	if os.Getenv("AWS_REGION") != "" {
+		envVars["AWS_REGION"] = os.Getenv("AWS_REGION")
+	}
+
+	if os.Getenv("GOSSIP_DNS_CONN_LIMIT") != "" {
+		envVars["GOSSIP_DNS_CONN_LIMIT"] = os.Getenv("GOSSIP_DNS_CONN_LIMIT")
+	}
+
+	// Pass in required credentials when using user-defined s3 endpoint
+	if os.Getenv("S3_ENDPOINT") != "" {
+		envVars["S3_ENDPOINT"] = os.Getenv("S3_ENDPOINT")
+		envVars["S3_REGION"] = os.Getenv("S3_REGION")
+		envVars["S3_ACCESS_KEY_ID"] = os.Getenv("S3_ACCESS_KEY_ID")
+		envVars["S3_SECRET_ACCESS_KEY"] = os.Getenv("S3_SECRET_ACCESS_KEY")
+	}
+
+	// Pass in required credentials when using user-defined swift endpoint
+	if os.Getenv("OS_AUTH_URL") != "" {
+		for _, envVar := range []string{
+			"OS_TENANT_ID", "OS_TENANT_NAME", "OS_PROJECT_ID", "OS_PROJECT_NAME",
+			"OS_PROJECT_DOMAIN_NAME", "OS_PROJECT_DOMAIN_ID",
+			"OS_DOMAIN_NAME", "OS_DOMAIN_ID",
+			"OS_USERNAME",
+			"OS_PASSWORD",
+			"OS_AUTH_URL",
+			"OS_REGION_NAME",
+			"OS_APPLICATION_CREDENTIAL_ID",
+			"OS_APPLICATION_CREDENTIAL_SECRET",
+		} {
+			envVars[envVar] = os.Getenv(envVar)
+		}
+	}
+
+	if os.Getenv("DIGITALOCEAN_ACCESS_TOKEN") != "" {
+		envVars["DIGITALOCEAN_ACCESS_TOKEN"] = os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")
+	}
+
+	if os.Getenv("OSS_REGION") != "" {
+		envVars["OSS_REGION"] = os.Getenv("OSS_REGION")
+	}
+
+	if os.Getenv("ALIYUN_ACCESS_KEY_ID") != "" {
+		envVars["ALIYUN_ACCESS_KEY_ID"] = os.Getenv("ALIYUN_ACCESS_KEY_ID")
+		envVars["ALIYUN_ACCESS_KEY_SECRET"] = os.Getenv("ALIYUN_ACCESS_KEY_SECRET")
+	}
+
+	if os.Getenv("AZURE_STORAGE_ACCOUNT") != "" {
+		envVars["AZURE_STORAGE_ACCOUNT"] = os.Getenv("AZURE_STORAGE_ACCOUNT")
+	}
+
+	sysconfig := ""
+	for key, value := range envVars {
+		sysconfig += key + "=" + value + "\n"
+	}
+
+	task := &nodetasks.File{
+		Path:     "/etc/sysconfig/kops-configuration",
+		Contents: fi.NewStringResource(sysconfig),
+		Type:     nodetasks.FileType_File,
+	}
+
+	return task
 }
 
 func (i *Installation) buildSystemdJob() *nodetasks.Service {
@@ -108,37 +169,10 @@ func (i *Installation) buildSystemdJob() *nodetasks.Service {
 	serviceName := "kops-configuration.service"
 
 	manifest := &systemd.Manifest{}
-	manifest.Set("Unit", "Description", "Run kops bootstrap (nodeup)")
+	manifest.Set("Unit", "Description", "Run kOps bootstrap (nodeup)")
 	manifest.Set("Unit", "Documentation", "https://github.com/kubernetes/kops")
 
-	var buffer bytes.Buffer
-
-	if os.Getenv("AWS_REGION") != "" {
-		buffer.WriteString("\"AWS_REGION=")
-		buffer.WriteString(os.Getenv("AWS_REGION"))
-		buffer.WriteString("\" ")
-	}
-
-	// Pass in required credentials when using user-defined s3 endpoint
-	if os.Getenv("S3_ENDPOINT") != "" {
-		buffer.WriteString("\"S3_ENDPOINT=")
-		buffer.WriteString(os.Getenv("S3_ENDPOINT"))
-		buffer.WriteString("\" ")
-		buffer.WriteString("\"S3_REGION=")
-		buffer.WriteString(os.Getenv("S3_REGION"))
-		buffer.WriteString("\" ")
-		buffer.WriteString("\"S3_ACCESS_KEY_ID=")
-		buffer.WriteString(os.Getenv("S3_ACCESS_KEY_ID"))
-		buffer.WriteString("\" ")
-		buffer.WriteString("\"S3_SECRET_ACCESS_KEY=")
-		buffer.WriteString(os.Getenv("S3_SECRET_ACCESS_KEY"))
-		buffer.WriteString("\" ")
-	}
-
-	if buffer.String() != "" {
-		manifest.Set("Service", "Environment", buffer.String())
-	}
-
+	manifest.Set("Service", "EnvironmentFile", "/etc/sysconfig/kops-configuration")
 	manifest.Set("Service", "EnvironmentFile", "/etc/environment")
 	manifest.Set("Service", "ExecStart", command)
 	manifest.Set("Service", "Type", "oneshot")
@@ -146,7 +180,7 @@ func (i *Installation) buildSystemdJob() *nodetasks.Service {
 	manifest.Set("Install", "WantedBy", "multi-user.target")
 
 	manifestString := manifest.Render()
-	glog.V(8).Infof("Built service manifest %q\n%s", serviceName, manifestString)
+	klog.V(8).Infof("Built service manifest %q\n%s", serviceName, manifestString)
 
 	service := &nodetasks.Service{
 		Name:       serviceName,

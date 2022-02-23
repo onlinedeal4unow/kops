@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package pki
 import (
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
 	crypto_rand "crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -27,9 +28,16 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
+
+// DefaultPrivateKeySize is the key size to use when generating private keys
+// It can be overridden by the KOPS_RSA_PRIVATE_KEY_SIZE env var, or by tests
+// (as generating RSA keys can be a bottleneck for testing)
+var DefaultPrivateKeySize = 2048
 
 func ParsePEMPrivateKey(data []byte) (*PrivateKey, error) {
 	k, err := parsePEMPrivateKey(data)
@@ -43,7 +51,19 @@ func ParsePEMPrivateKey(data []byte) (*PrivateKey, error) {
 }
 
 func GeneratePrivateKey() (*PrivateKey, error) {
-	rsaKey, err := rsa.GenerateKey(crypto_rand.Reader, 2048)
+	rsaKeySize := DefaultPrivateKeySize
+
+	if os.Getenv("KOPS_RSA_PRIVATE_KEY_SIZE") != "" {
+		s := os.Getenv("KOPS_RSA_PRIVATE_KEY_SIZE")
+		if v, err := strconv.Atoi(s); err != nil {
+			return nil, fmt.Errorf("error parsing KOPS_RSA_PRIVATE_KEY_SIZE=%s as integer", s)
+		} else {
+			rsaKeySize = int(v)
+			klog.V(4).Infof("Generating key of size %d, set by KOPS_RSA_PRIVATE_KEY_SIZE env var", rsaKeySize)
+		}
+	}
+
+	rsaKey, err := rsa.GenerateKey(crypto_rand.Reader, rsaKeySize)
 	if err != nil {
 		return nil, fmt.Errorf("error generating RSA private key: %v", err)
 	}
@@ -53,7 +73,7 @@ func GeneratePrivateKey() (*PrivateKey, error) {
 }
 
 type PrivateKey struct {
-	Key crypto.PrivateKey
+	Key crypto.Signer
 }
 
 func (k *PrivateKey) AsString() (string, error) {
@@ -95,7 +115,7 @@ func (k *PrivateKey) UnmarshalJSON(b []byte) (err error) {
 			if err2 == nil {
 				r2, err2 := parsePEMPrivateKey(d)
 				if err2 == nil {
-					glog.Warningf("used base64 decode of PrivateKey")
+					klog.Warningf("used base64 decode of PrivateKey")
 					r = r2
 					err = nil
 				}
@@ -130,41 +150,61 @@ func (k *PrivateKey) WriteTo(w io.Writer) (int64, error) {
 	}
 
 	var data bytes.Buffer
-	var err error
 
 	switch pk := k.Key.(type) {
 	case *rsa.PrivateKey:
-		err = pem.Encode(w, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(pk)})
+		if err := pem.Encode(w, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(pk)}); err != nil {
+			return 0, fmt.Errorf("error encoding RSA private key: %w", err)
+		}
+	case *ecdsa.PrivateKey:
+		b, err := x509.MarshalECPrivateKey(pk)
+		if err != nil {
+			return 0, fmt.Errorf("error encoding ECDSA private key: %w", err)
+		}
+		if err := pem.Encode(w, &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}); err != nil {
+			return 0, fmt.Errorf("error encoding ECDSA private key: %w", err)
+		}
 	default:
 		return 0, fmt.Errorf("unknown private key type: %T", k.Key)
-	}
-
-	if err != nil {
-		return 0, fmt.Errorf("error writing SSL private key: %v", err)
 	}
 
 	return data.WriteTo(w)
 }
 
-func parsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
+func (k *PrivateKey) WriteToFile(filename string, perm os.FileMode) error {
+	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = k.WriteTo(f)
+	if err1 := f.Close(); err == nil {
+		err = err1
+	}
+	return err
+}
+
+func parsePEMPrivateKey(pemData []byte) (crypto.Signer, error) {
 	for {
 		block, rest := pem.Decode(pemData)
 		if block == nil {
-			return nil, fmt.Errorf("could not parse private key")
+			return nil, fmt.Errorf("could not parse private key (unable to decode PEM)")
 		}
 
 		if block.Type == "RSA PRIVATE KEY" {
-			glog.V(8).Infof("Parsing pem block: %q", block.Type)
+			klog.V(10).Infof("Parsing pem block: %q", block.Type)
 			return x509.ParsePKCS1PrivateKey(block.Bytes)
+		} else if block.Type == "EC PRIVATE KEY" {
+			klog.V(10).Infof("Parsing pem block: %q", block.Type)
+			return x509.ParseECPrivateKey(block.Bytes)
 		} else if block.Type == "PRIVATE KEY" {
-			glog.V(8).Infof("Parsing pem block: %q", block.Type)
+			klog.V(10).Infof("Parsing pem block: %q", block.Type)
 			k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 			if err != nil {
 				return nil, err
 			}
-			return k.(crypto.PrivateKey), nil
+			return k.(crypto.Signer), nil
 		} else {
-			glog.Infof("Ignoring unexpected PEM block: %q", block.Type)
+			klog.Infof("Ignoring unexpected PEM block: %q", block.Type)
 		}
 
 		pemData = rest

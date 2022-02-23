@@ -1,6 +1,9 @@
 package routers
 
 import (
+	"encoding/json"
+	"time"
+
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/pagination"
 )
@@ -8,7 +11,7 @@ import (
 // GatewayInfo represents the information of an external gateway for any
 // particular network router.
 type GatewayInfo struct {
-	NetworkID        string            `json:"network_id"`
+	NetworkID        string            `json:"network_id,omitempty"`
 	EnableSNAT       *bool             `json:"enable_snat,omitempty"`
 	ExternalFixedIPs []ExternalFixedIP `json:"external_fixed_ips,omitempty"`
 }
@@ -16,7 +19,7 @@ type GatewayInfo struct {
 // ExternalFixedIP is the IP address and subnet ID of the external gateway of a
 // router.
 type ExternalFixedIP struct {
-	IPAddress string `json:"ip_address"`
+	IPAddress string `json:"ip_address,omitempty"`
 	SubnetID  string `json:"subnet_id"`
 }
 
@@ -51,15 +54,28 @@ type Router struct {
 	// unique.
 	Name string `json:"name"`
 
+	// Description for the router.
+	Description string `json:"description"`
+
 	// ID is the unique identifier for the router.
 	ID string `json:"id"`
 
-	// TenantID is the owner of the router. Only admin users can specify a tenant
-	// identifier other than its own.
+	// TenantID is the project owner of the router. Only admin users can
+	// specify a project identifier other than its own.
 	TenantID string `json:"tenant_id"`
+
+	// ProjectID is the project owner of the router.
+	ProjectID string `json:"project_id"`
 
 	// Routes are a collection of static routes that the router will host.
 	Routes []Route `json:"routes"`
+
+	// Availability zone hints groups network nodes that run services like DHCP, L3, FW, and others.
+	// Used to make network resources highly available.
+	AvailabilityZoneHints []string `json:"availability_zone_hints"`
+
+	// Tags optionally set via extensions/attributestags
+	Tags []string `json:"tags"`
 }
 
 // RouterPage is the page returned by a pager when traversing over a
@@ -165,4 +181,97 @@ func (r InterfaceResult) Extract() (*InterfaceInfo, error) {
 	var s InterfaceInfo
 	err := r.ExtractInto(&s)
 	return &s, err
+}
+
+// L3Agent represents a Neutron agent for routers.
+type L3Agent struct {
+	// ID is the id of the agent.
+	ID string `json:"id"`
+
+	// AdminStateUp is an administrative state of the agent.
+	AdminStateUp bool `json:"admin_state_up"`
+
+	// AgentType is a type of the agent.
+	AgentType string `json:"agent_type"`
+
+	// Alive indicates whether agent is alive or not.
+	Alive bool `json:"alive"`
+
+	// ResourcesSynced indicates whether agent is synced or not.
+	// Not all agent types track resources via Placement.
+	ResourcesSynced bool `json:"resources_synced"`
+
+	// AvailabilityZone is a zone of the agent.
+	AvailabilityZone string `json:"availability_zone"`
+
+	// Binary is an executable binary of the agent.
+	Binary string `json:"binary"`
+
+	// Configurations is a configuration specific key/value pairs that are
+	// determined by the agent binary and type.
+	Configurations map[string]interface{} `json:"configurations"`
+
+	// CreatedAt is a creation timestamp.
+	CreatedAt time.Time `json:"-"`
+
+	// StartedAt is a starting timestamp.
+	StartedAt time.Time `json:"-"`
+
+	// HeartbeatTimestamp is a last heartbeat timestamp.
+	HeartbeatTimestamp time.Time `json:"-"`
+
+	// Description contains agent description.
+	Description string `json:"description"`
+
+	// Host is a hostname of the agent system.
+	Host string `json:"host"`
+
+	// Topic contains name of AMQP topic.
+	Topic string `json:"topic"`
+
+	// HAState is a ha state of agent(active/standby) for router
+	HAState string `json:"ha_state"`
+
+	// ResourceVersions is a list agent known objects and version numbers
+	ResourceVersions map[string]interface{} `json:"resource_versions"`
+}
+
+// UnmarshalJSON helps to convert the timestamps into the time.Time type.
+func (r *L3Agent) UnmarshalJSON(b []byte) error {
+	type tmp L3Agent
+	var s struct {
+		tmp
+		CreatedAt          gophercloud.JSONRFC3339ZNoTNoZ `json:"created_at"`
+		StartedAt          gophercloud.JSONRFC3339ZNoTNoZ `json:"started_at"`
+		HeartbeatTimestamp gophercloud.JSONRFC3339ZNoTNoZ `json:"heartbeat_timestamp"`
+	}
+	err := json.Unmarshal(b, &s)
+	if err != nil {
+		return err
+	}
+	*r = L3Agent(s.tmp)
+
+	r.CreatedAt = time.Time(s.CreatedAt)
+	r.StartedAt = time.Time(s.StartedAt)
+	r.HeartbeatTimestamp = time.Time(s.HeartbeatTimestamp)
+
+	return nil
+}
+
+type ListL3AgentsPage struct {
+	pagination.SinglePageBase
+}
+
+func (r ListL3AgentsPage) IsEmpty() (bool, error) {
+	v, err := ExtractL3Agents(r)
+	return len(v) == 0, err
+}
+
+func ExtractL3Agents(r pagination.Page) ([]L3Agent, error) {
+	var s struct {
+		L3Agents []L3Agent `json:"agents"`
+	}
+
+	err := (r.(ListL3AgentsPage)).ExtractInto(&s)
+	return s.L3Agents, err
 }

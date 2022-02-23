@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,28 +17,31 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/kops/cmd/kops/util"
-	api "k8s.io/kops/pkg/apis/kops"
+	kopsapi "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/registry"
+	"k8s.io/kops/pkg/commands/commandutils"
+	"k8s.io/kops/pkg/kopscodecs"
 	"k8s.io/kops/util/pkg/tables"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubectl/pkg/util/i18n"
+	"k8s.io/kubectl/pkg/util/templates"
 )
 
 var (
-	get_cluster_long = templates.LongDesc(i18n.T(`
+	getClusterLong = templates.LongDesc(i18n.T(`
 	Display one or many cluster resources.`))
 
-	get_cluster_example = templates.Examples(i18n.T(`
+	getClusterExample = templates.Examples(i18n.T(`
 	# Get all clusters in a state store
 	kops get clusters
 
@@ -52,7 +55,7 @@ var (
 	kops get cluster k8s-cluster.example.com -o yaml > cluster-desired-config.yaml
 	`))
 
-	get_cluster_short = i18n.T(`Get one or many clusters.`)
+	getClusterShort = i18n.T(`Get one or many clusters.`)
 
 	// Warning for --full.  Since we are not using the template from kubectl
 	// we have to have zero white space before the comment characters otherwise
@@ -86,28 +89,26 @@ func NewCmdGetCluster(f *util.Factory, out io.Writer, getOptions *GetOptions) *c
 	}
 
 	cmd := &cobra.Command{
-		Use:     "clusters",
+		Use:     "clusters [CLUSTER]...",
 		Aliases: []string{"cluster"},
-		Short:   get_cluster_short,
-		Long:    get_cluster_long,
-		Example: get_cluster_example,
-		Run: func(cmd *cobra.Command, args []string) {
+		Short:   getClusterShort,
+		Long:    getClusterLong,
+		Example: getClusterExample,
+		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 {
-				options.ClusterNames = append(options.ClusterNames, args...)
-			}
-
-			if rootCommand.clusterName != "" {
-				if len(args) != 0 {
-					exitWithError(fmt.Errorf("cannot mix --name for cluster with positional arguments"))
+				if rootCommand.clusterName != "" {
+					return fmt.Errorf("cannot mix --name for cluster with positional arguments")
 				}
-
+				options.ClusterNames = append(options.ClusterNames, args...)
+			} else if rootCommand.clusterName != "" {
 				options.ClusterNames = append(options.ClusterNames, rootCommand.clusterName)
 			}
 
-			err := RunGetClusters(&rootCommand, os.Stdout, &options)
-			if err != nil {
-				exitWithError(err)
-			}
+			return nil
+		},
+		ValidArgsFunction: commandutils.CompleteClusterName(f, false, true),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return RunGetClusters(context.TODO(), f, out, &options)
 		},
 	}
 
@@ -116,18 +117,36 @@ func NewCmdGetCluster(f *util.Factory, out io.Writer, getOptions *GetOptions) *c
 	return cmd
 }
 
-func RunGetClusters(context Factory, out io.Writer, options *GetClusterOptions) error {
-	client, err := context.Clientset()
+func RunGetClusters(ctx context.Context, f commandutils.Factory, out io.Writer, options *GetClusterOptions) error {
+	client, err := f.Clientset()
 	if err != nil {
 		return err
 	}
 
-	clusterList, err := client.ListClusters(metav1.ListOptions{})
-	if err != nil {
-		return err
+	singleClusterSelected := false
+	var clusterList []*kopsapi.Cluster
+	if len(options.ClusterNames) == 1 {
+		// Optimization - avoid fetching all clusters if we're only querying one
+		singleClusterSelected = true
+		cluster, err := client.GetCluster(ctx, options.ClusterNames[0])
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+		} else {
+			clusterList = append(clusterList, cluster)
+		}
+	} else {
+		list, err := client.ListClusters(ctx, metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+		for i := range list.Items {
+			clusterList = append(clusterList, &list.Items[i])
+		}
 	}
 
-	clusters, err := buildClusters(options.ClusterNames, clusterList)
+	clusters, err := filterClustersByName(options.ClusterNames, clusterList)
 	if err != nil {
 		return err
 	}
@@ -147,59 +166,61 @@ func RunGetClusters(context Factory, out io.Writer, options *GetClusterOptions) 
 	}
 
 	var obj []runtime.Object
-	if options.output != OutputTable {
+	if options.Output != OutputTable {
 		for _, c := range clusters {
 			obj = append(obj, c)
 		}
 	}
 
-	switch options.output {
+	switch options.Output {
 	case OutputTable:
 		return clusterOutputTable(clusters, out)
 	case OutputYaml:
 		return fullOutputYAML(out, obj...)
 	case OutputJSON:
-		return fullOutputJSON(out, obj...)
+		// if singleClusterSelected is true, only a single object is returned
+		// otherwise to keep it consistent, always returns an array.
+		// Ex: kops get clusters -ojson should will always return an array (even if 1 cluster is available)
+		// kops get cluster test.example.com -o json will return a single object (since a specific cluster is selected)
+		return fullOutputJSON(out, singleClusterSelected, obj...)
 	default:
-		return fmt.Errorf("Unknown output format: %q", options.output)
+		return fmt.Errorf("Unknown output format: %q", options.Output)
 	}
 }
 
-func buildClusters(args []string, clusterList *api.ClusterList) ([]*api.Cluster, error) {
-	var clusters []*api.Cluster
-	if len(args) != 0 {
-		m := make(map[string]*api.Cluster)
-		for i := range clusterList.Items {
-			c := &clusterList.Items[i]
+// filterClustersByName returns the clusters matching the specified names.
+// If names are specified and no cluster is found with a name, we return an error.
+func filterClustersByName(clusterNames []string, clusters []*kopsapi.Cluster) ([]*kopsapi.Cluster, error) {
+	if len(clusterNames) != 0 {
+		// Build a map as we want to return them in the same order as args
+		m := make(map[string]*kopsapi.Cluster)
+		for _, c := range clusters {
 			m[c.ObjectMeta.Name] = c
 		}
-		for _, clusterName := range args {
+		var filtered []*kopsapi.Cluster
+		for _, clusterName := range clusterNames {
 			c := m[clusterName]
 			if c == nil {
 				return nil, fmt.Errorf("cluster not found %q", clusterName)
 			}
 
-			clusters = append(clusters, c)
+			filtered = append(filtered, c)
 		}
-	} else {
-		for i := range clusterList.Items {
-			c := &clusterList.Items[i]
-			clusters = append(clusters, c)
-		}
+		return filtered, nil
 	}
 
 	return clusters, nil
 }
 
-func clusterOutputTable(clusters []*api.Cluster, out io.Writer) error {
+func clusterOutputTable(clusters []*kopsapi.Cluster, out io.Writer) error {
 	t := &tables.Table{}
-	t.AddColumn("NAME", func(c *api.Cluster) string {
+	t.AddColumn("NAME", func(c *kopsapi.Cluster) string {
 		return c.ObjectMeta.Name
 	})
-	t.AddColumn("CLOUD", func(c *api.Cluster) string {
+	t.AddColumn("CLOUD", func(c *kopsapi.Cluster) string {
 		return c.Spec.CloudProvider
 	})
-	t.AddColumn("ZONES", func(c *api.Cluster) string {
+	t.AddColumn("ZONES", func(c *kopsapi.Cluster) string {
 		zones := sets.NewString()
 		for _, s := range c.Spec.Subnets {
 			if s.Zone != "" {
@@ -212,12 +233,10 @@ func clusterOutputTable(clusters []*api.Cluster, out io.Writer) error {
 	return t.Render(clusters, out, "NAME", "CLOUD", "ZONES")
 }
 
-// fullOutputJson outputs the marshalled JSON of a list of clusters and instance groups.  It will handle
+// fullOutputJSON outputs the marshalled JSON of a list of clusters and instance groups.  It will handle
 // nils for clusters and instanceGroups slices.
-func fullOutputJSON(out io.Writer, args ...runtime.Object) error {
-	argsLen := len(args)
-
-	if argsLen > 1 {
+func fullOutputJSON(out io.Writer, singleObject bool, args ...runtime.Object) error {
+	if !singleObject {
 		if _, err := fmt.Fprint(out, "["); err != nil {
 			return err
 		}
@@ -234,7 +253,7 @@ func fullOutputJSON(out io.Writer, args ...runtime.Object) error {
 		}
 	}
 
-	if argsLen > 1 {
+	if !singleObject {
 		if _, err := fmt.Fprint(out, "]"); err != nil {
 			return err
 		}
@@ -243,7 +262,7 @@ func fullOutputJSON(out io.Writer, args ...runtime.Object) error {
 	return nil
 }
 
-// fullOutputJson outputs the marshalled JSON of a list of clusters and instance groups.  It will handle
+// fullOutputYAML outputs the marshalled JSON of a list of clusters and instance groups.  It will handle
 // nils for clusters and instanceGroups slices.
 func fullOutputYAML(out io.Writer, args ...runtime.Object) error {
 	for i, obj := range args {
@@ -259,19 +278,28 @@ func fullOutputYAML(out io.Writer, args ...runtime.Object) error {
 	return nil
 }
 
-func fullClusterSpecs(clusters []*api.Cluster) ([]*api.Cluster, error) {
-	var fullSpecs []*api.Cluster
+func fullClusterSpecs(clusters []*kopsapi.Cluster) ([]*kopsapi.Cluster, error) {
+	var fullSpecs []*kopsapi.Cluster
 	for _, cluster := range clusters {
 		configBase, err := registry.ConfigBase(cluster)
 		if err != nil {
 			return nil, fmt.Errorf("error reading full cluster spec for %q: %v", cluster.ObjectMeta.Name, err)
 		}
-		fullSpec := &api.Cluster{}
-		err = registry.ReadConfigDeprecated(configBase.Join(registry.PathClusterCompleted), fullSpec)
+		configPath := configBase.Join(registry.PathClusterCompleted)
+		b, err := configPath.ReadFile()
 		if err != nil {
-			return nil, fmt.Errorf("error reading full cluster spec for %q: %v", cluster.ObjectMeta.Name, err)
+			return nil, fmt.Errorf("error loading Cluster %q: %v", configPath, err)
 		}
-		fullSpecs = append(fullSpecs, fullSpec)
+
+		o, _, err := kopscodecs.Decode(b, nil)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing Cluster %q: %v", configPath, err)
+		}
+		if fullSpec, ok := o.(*kopsapi.Cluster); ok {
+			fullSpecs = append(fullSpecs, fullSpec)
+		} else {
+			return nil, fmt.Errorf("unexpected object type for Cluster %q: %T", configPath, o)
+		}
 	}
 	return fullSpecs, nil
 }

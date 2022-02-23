@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,21 +20,26 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=InternetGateway
+// +kops:fitask
 type InternetGateway struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
-	ID     *string
-	VPC    *VPC
+	ID  *string
+	VPC *VPC
+	// Shared is set if this is a shared InternetGateway
 	Shared *bool
+
+	// Tags is a map of aws tags that are added to the InternetGateway
+	Tags map[string]string
 }
 
 var _ fi.CompareWithID = &InternetGateway{}
@@ -89,9 +94,10 @@ func (e *InternetGateway) Find(c *fi.Context) (*InternetGateway, error) {
 	actual := &InternetGateway{
 		ID:   igw.InternetGatewayId,
 		Name: findNameTag(igw.Tags),
+		Tags: intersectTags(igw.Tags, e.Tags),
 	}
 
-	glog.V(2).Infof("found matching InternetGateway %q", *actual.ID)
+	klog.V(2).Infof("found matching InternetGateway %q", *actual.ID)
 
 	for _, attachment := range igw.Attachments {
 		actual.VPC = &VPC{ID: attachment.VpcId}
@@ -100,8 +106,16 @@ func (e *InternetGateway) Find(c *fi.Context) (*InternetGateway, error) {
 	// Prevent spurious comparison failures
 	actual.Shared = e.Shared
 	actual.Lifecycle = e.Lifecycle
+	if shared {
+		actual.Name = e.Name
+	}
 	if e.ID == nil {
 		e.ID = actual.ID
+	}
+
+	// We don't set the tags for a shared IGW
+	if fi.BoolValue(e.Shared) {
+		actual.Tags = e.Tags
 	}
 
 	return actual, nil
@@ -134,9 +148,11 @@ func (_ *InternetGateway) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Intern
 	}
 
 	if a == nil {
-		glog.V(2).Infof("Creating InternetGateway")
+		klog.V(2).Infof("Creating InternetGateway")
 
-		request := &ec2.CreateInternetGatewayInput{}
+		request := &ec2.CreateInternetGatewayInput{
+			TagSpecifications: awsup.EC2TagSpecification(ec2.ResourceTypeInternetGateway, e.Tags),
+		}
 
 		response, err := t.Cloud.EC2().CreateInternetGateway(request)
 		if err != nil {
@@ -147,7 +163,7 @@ func (_ *InternetGateway) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Intern
 	}
 
 	if a == nil || (changes != nil && changes.VPC != nil) {
-		glog.V(2).Infof("Creating InternetGatewayAttachment")
+		klog.V(2).Infof("Creating InternetGatewayAttachment")
 
 		attachRequest := &ec2.AttachInternetGatewayInput{
 			VpcId:             e.VPC.ID,
@@ -160,17 +176,12 @@ func (_ *InternetGateway) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *Intern
 		}
 	}
 
-	tags := t.Cloud.BuildTags(e.Name)
-	if shared {
-		// Don't tag shared resources
-		tags = nil
-	}
-	return t.AddAWSTags(*e.ID, tags)
+	return t.AddAWSTags(*e.ID, e.Tags)
 }
 
 type terraformInternetGateway struct {
-	VPCID *terraform.Literal `json:"vpc_id"`
-	Tags  map[string]string  `json:"tags,omitempty"`
+	VPCID *terraformWriter.Literal `cty:"vpc_id"`
+	Tags  map[string]string        `cty:"tags"`
 }
 
 func (_ *InternetGateway) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *InternetGateway) error {
@@ -191,7 +202,7 @@ func (_ *InternetGateway) RenderTerraform(t *terraform.TerraformTarget, a, e, ch
 				return err
 			}
 			if igw == nil {
-				glog.Warningf("Cannot find internet gateway for VPC %q", vpcID)
+				klog.Warningf("Cannot find internet gateway for VPC %q", vpcID)
 			} else {
 				e.ID = igw.InternetGatewayId
 			}
@@ -200,28 +211,26 @@ func (_ *InternetGateway) RenderTerraform(t *terraform.TerraformTarget, a, e, ch
 		return nil
 	}
 
-	cloud := t.Cloud.(awsup.AWSCloud)
-
 	tf := &terraformInternetGateway{
 		VPCID: e.VPC.TerraformLink(),
-		Tags:  cloud.BuildTags(e.Name),
+		Tags:  e.Tags,
 	}
 
 	return t.RenderResource("aws_internet_gateway", *e.Name, tf)
 }
 
-func (e *InternetGateway) TerraformLink() *terraform.Literal {
+func (e *InternetGateway) TerraformLink() *terraformWriter.Literal {
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		if e.ID == nil {
-			glog.Fatalf("ID must be set, if InternetGateway is shared: %s", e)
+			klog.Fatalf("ID must be set, if InternetGateway is shared: %s", e)
 		}
 
-		glog.V(4).Infof("reusing existing InternetGateway with id %q", *e.ID)
-		return terraform.LiteralFromStringValue(*e.ID)
+		klog.V(4).Infof("reusing existing InternetGateway with id %q", *e.ID)
+		return terraformWriter.LiteralFromStringValue(*e.ID)
 	}
 
-	return terraform.LiteralProperty("aws_internet_gateway", *e.Name, "id")
+	return terraformWriter.LiteralProperty("aws_internet_gateway", *e.Name, "id")
 }
 
 type cloudformationInternetGateway struct {
@@ -251,7 +260,7 @@ func (_ *InternetGateway) RenderCloudformation(t *cloudformation.CloudformationT
 				return err
 			}
 			if igw == nil {
-				glog.Warningf("Cannot find internet gateway for VPC %q", vpcID)
+				klog.Warningf("Cannot find internet gateway for VPC %q", vpcID)
 			} else {
 				e.ID = igw.InternetGatewayId
 			}
@@ -260,11 +269,9 @@ func (_ *InternetGateway) RenderCloudformation(t *cloudformation.CloudformationT
 		return nil
 	}
 
-	cloud := t.Cloud.(awsup.AWSCloud)
-
 	{
 		cf := &cloudformationInternetGateway{
-			Tags: buildCloudformationTags(cloud.BuildTags(e.Name)),
+			Tags: buildCloudformationTags(e.Tags),
 		}
 
 		err := t.RenderResource("AWS::EC2::InternetGateway", *e.Name, cf)
@@ -292,10 +299,10 @@ func (e *InternetGateway) CloudformationLink() *cloudformation.Literal {
 	shared := fi.BoolValue(e.Shared)
 	if shared {
 		if e.ID == nil {
-			glog.Fatalf("ID must be set, if InternetGateway is shared: %s", e)
+			klog.Fatalf("ID must be set, if InternetGateway is shared: %s", e)
 		}
 
-		glog.V(4).Infof("reusing existing InternetGateway with id %q", *e.ID)
+		klog.V(4).Infof("reusing existing InternetGateway with id %q", *e.ID)
 		return cloudformation.LiteralString(*e.ID)
 	}
 

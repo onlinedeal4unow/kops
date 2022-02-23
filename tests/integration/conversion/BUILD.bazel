@@ -6,20 +6,23 @@ go_test(
     data = [
         "exported_testdata",  # keep
     ],
-    importpath = "k8s.io/kops/tests/integration/conversion",
     deps = [
-        "//pkg/apis/kops:go_default_library",
-        "//pkg/apis/kops/v1alpha1:go_default_library",
         "//pkg/apis/kops/v1alpha2:go_default_library",
+        "//pkg/apis/kops/v1alpha3:go_default_library",
         "//pkg/diff:go_default_library",
         "//pkg/kopscodecs:go_default_library",
+        "//util/pkg/text:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",
     ],
 )
 
 filegroup(
     name = "exported_testdata",
-    srcs = glob(["minimal/**"]),
+    srcs = glob([
+        "aws/**",
+        "canal/**",
+        "cilium/**",
+        "minimal/**",
+    ]),
     visibility = ["//visibility:public"],
 )

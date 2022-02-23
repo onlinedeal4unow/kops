@@ -11,29 +11,17 @@ Gophercloud is an OpenStack Go SDK.
 
 ## How to install
 
-Before installing, you need to ensure that your [GOPATH environment variable](https://golang.org/doc/code.html#GOPATH)
-is pointing to an appropriate directory where you want to install Gophercloud:
+Reference a Gophercloud package in your code:
 
-```bash
-mkdir $HOME/go
-export GOPATH=$HOME/go
+```Go
+import "github.com/gophercloud/gophercloud"
 ```
 
-To protect yourself against changes in your dependencies, we highly recommend choosing a
-[dependency management solution](https://github.com/golang/go/wiki/PackageManagementTools) for
-your projects, such as [godep](https://github.com/tools/godep). Once this is set up, you can install
-Gophercloud as a dependency like so:
+Then update your `go.mod`:
 
-```bash
-go get github.com/gophercloud/gophercloud
-
-# Edit your code to import relevant packages from "github.com/gophercloud/gophercloud"
-
-godep save ./...
+```shell
+go mod tidy
 ```
-
-This will install all the source files you need into a `Godeps/_workspace` directory, which is
-referenceable from your own source files when you use the `godep go` command.
 
 ## Getting started
 
@@ -59,6 +47,13 @@ variables. To execute the file, run `source admin-openrc.sh` and you will be
 prompted for your password.
 
 ### Authentication
+
+> NOTE: It is now recommended to use the `clientconfig` package found at
+> https://github.com/gophercloud/utils/tree/master/openstack/clientconfig
+> for all authentication purposes.
+>
+> The below documentation is still relevant. clientconfig simply implements
+> the below and presents it in an easier and more flexible way.
 
 Once you have access to your credentials, you can begin plugging them into
 Gophercloud. The next step is authentication, and this is handled by a base
@@ -127,7 +122,7 @@ new resource in the `server` variable (a
 
 ## Advanced Usage
 
-Have a look at the [FAQ](./FAQ.md) for some tips on customizing the way Gophercloud works.
+Have a look at the [FAQ](./docs/FAQ.md) for some tips on customizing the way Gophercloud works.
 
 ## Backwards-Compatibility Guarantees
 
@@ -140,4 +135,20 @@ See the [contributing guide](./.github/CONTRIBUTING.md).
 ## Help and feedback
 
 If you're struggling with something or have spotted a potential bug, feel free
-to submit an issue to our [bug tracker](/issues).
+to submit an issue to our [bug tracker](https://github.com/gophercloud/gophercloud/issues).
+
+## Thank You
+
+We'd like to extend special thanks and appreciation to the following:
+
+### OpenLab
+
+<a href="http://openlabtesting.org/"><img src="./docs/assets/openlab.png" width="600px"></a>
+
+OpenLab is providing a full CI environment to test each PR and merge for a variety of OpenStack releases.
+
+### VEXXHOST
+
+<a href="https://vexxhost.com/"><img src="./docs/assets/vexxhost.png" width="600px"></a>
+
+VEXXHOST is providing their services to assist with the development and testing of Gophercloud.

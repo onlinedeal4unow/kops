@@ -10,19 +10,11 @@ go_library(
         "container_update.go",
         "container_wait.go",
         "host_config.go",
+        "hostconfig_unix.go",
+        "hostconfig_windows.go",
         "waitcondition.go",
-    ] + select({
-        "@io_bazel_rules_go//go/platform:darwin_amd64": [
-            "hostconfig_unix.go",
-        ],
-        "@io_bazel_rules_go//go/platform:linux_amd64": [
-            "hostconfig_unix.go",
-        ],
-        "@io_bazel_rules_go//go/platform:windows_amd64": [
-            "hostconfig_windows.go",
-        ],
-        "//conditions:default": [],
-    }),
+    ],
+    importmap = "k8s.io/kops/vendor/github.com/docker/docker/api/types/container",
     importpath = "github.com/docker/docker/api/types/container",
     visibility = ["//visibility:public"],
     deps = [

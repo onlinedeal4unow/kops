@@ -1,4 +1,4 @@
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: Cluster
 metadata:
   creationTimestamp: "2016-12-12T04:13:14Z"
@@ -19,13 +19,16 @@ spec:
     - instanceGroup: master-us-test-1a
       name: us-test-1a
     name: events
-  kubernetesVersion: v1.4.12
+  iam: {}
+  kubelet:
+    anonymousAuth: false
+  kubernetesVersion: v1.21.0
   masterInternalName: api.internal.privatedns2.example.com
   masterPublicName: api.privatedns2.example.com
   networkCIDR: 172.20.0.0/16
-  networkID: vpc-123
+  networkID: vpc-12345678
   networking:
-    weave: {}
+    cni: {}
   nonMasqueradeCIDR: 100.64.0.0/10
   sshAccess:
   - 0.0.0.0/0
@@ -46,7 +49,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-12T04:13:15Z"
@@ -65,7 +68,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-12T04:13:15Z"
@@ -85,7 +88,7 @@ spec:
 
 ---
 
-apiVersion: kops/v1alpha2
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
   creationTimestamp: "2016-12-14T15:32:41Z"

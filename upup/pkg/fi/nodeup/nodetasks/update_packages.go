@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,11 +22,11 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/cloudinit"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
-	"k8s.io/kops/upup/pkg/fi/nodeup/tags"
+	"k8s.io/kops/util/pkg/distributions"
 )
 
 type UpdatePackages struct {
@@ -41,11 +41,17 @@ func NewUpdatePackages() *UpdatePackages {
 }
 
 func (p *UpdatePackages) GetDependencies(tasks map[string]fi.Task) []fi.Task {
-	return []fi.Task{}
+	deps := []fi.Task{}
+	for _, v := range tasks {
+		if _, ok := v.(*AptSource); ok {
+			deps = append(deps, v)
+		}
+	}
+	return deps
 }
 
 func (p *UpdatePackages) String() string {
-	return fmt.Sprintf("UpdatePackages")
+	return "UpdatePackages"
 }
 
 func (e *UpdatePackages) Find(c *fi.Context) (*UpdatePackages, error) {
@@ -62,20 +68,23 @@ func (s *UpdatePackages) CheckChanges(a, e, changes *UpdatePackages) error {
 
 func (_ *UpdatePackages) RenderLocal(t *local.LocalTarget, a, e, changes *UpdatePackages) error {
 	if os.Getenv("SKIP_PACKAGE_UPDATE") != "" {
-		glog.Infof("SKIP_PACKAGE_UPDATE was set; skipping package update")
+		klog.Infof("SKIP_PACKAGE_UPDATE was set; skipping package update")
 		return nil
 	}
+	d, err := distributions.FindDistribution("/")
+	if err != nil {
+		return fmt.Errorf("unknown or unsupported distro: %v", err)
+	}
 	var args []string
-	if t.HasTag(tags.TagOSFamilyDebian) {
+	if d.IsDebianFamily() {
 		args = []string{"apt-get", "update"}
-
-	} else if t.HasTag(tags.TagOSFamilyRHEL) {
+	} else if d.IsRHELFamily() {
 		// Probably not technically needed
 		args = []string{"/usr/bin/yum", "check-update"}
 	} else {
 		return fmt.Errorf("unsupported package system")
 	}
-	glog.Infof("running command %s", args)
+	klog.Infof("running command %s", args)
 	cmd := exec.Command(args[0], args[1:]...)
 	output, err := cmd.CombinedOutput()
 	// 'yum check-update' exits with 100 if it finds updates; treat it like a success

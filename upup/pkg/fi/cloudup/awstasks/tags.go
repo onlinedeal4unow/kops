@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,8 +17,12 @@ limitations under the License.
 package awstasks
 
 import (
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/eventbridge"
+	"github.com/aws/aws-sdk-go/service/iam"
 )
 
 func mapEC2TagsToMap(tags []*ec2.Tag) map[string]string {
@@ -27,6 +31,51 @@ func mapEC2TagsToMap(tags []*ec2.Tag) map[string]string {
 	}
 	m := make(map[string]string)
 	for _, t := range tags {
+		if strings.HasPrefix(aws.StringValue(t.Key), "aws:cloudformation:") {
+			continue
+		}
+		m[aws.StringValue(t.Key)] = aws.StringValue(t.Value)
+	}
+	return m
+}
+
+func mapIAMTagsToMap(tags []*iam.Tag) map[string]string {
+	if tags == nil {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, t := range tags {
+		if strings.HasPrefix(aws.StringValue(t.Key), "aws:cloudformation:") {
+			continue
+		}
+		m[aws.StringValue(t.Key)] = aws.StringValue(t.Value)
+	}
+	return m
+}
+
+func mapToIAMTags(tags map[string]string) []*iam.Tag {
+	if tags == nil {
+		return nil
+	}
+	m := make([]*iam.Tag, 0)
+	for k, v := range tags {
+		m = append(m, &iam.Tag{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+	return m
+}
+
+func mapEventBridgeTagsToMap(tags []*eventbridge.Tag) map[string]string {
+	if tags == nil {
+		return nil
+	}
+	m := make(map[string]string)
+	for _, t := range tags {
+		if strings.HasPrefix(aws.StringValue(t.Key), "aws:cloudformation:") {
+			continue
+		}
 		m[aws.StringValue(t.Key)] = aws.StringValue(t.Value)
 	}
 	return m
@@ -42,7 +91,7 @@ func findNameTag(tags []*ec2.Tag) *string {
 }
 
 // intersectTags returns the tags of interest from a specified list of AWS tags;
-// because we only add tags, this set of tags of interest is the tags that occur in the desired seet.
+// because we only add tags, this set of tags of interest is the tags that occur in the desired set.
 func intersectTags(tags []*ec2.Tag, desired map[string]string) map[string]string {
 	if tags == nil {
 		return nil
@@ -55,6 +104,10 @@ func intersectTags(tags []*ec2.Tag, desired map[string]string) map[string]string
 		if _, found := desired[k]; found {
 			actual[k] = v
 		}
+	}
+	if len(actual) == 0 && desired == nil {
+		// Avoid problems with comparison between nil & {}
+		return nil
 	}
 	return actual
 }

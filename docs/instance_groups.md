@@ -1,228 +1,117 @@
-# Instance Groups
+# The `InstanceGroup` resource
 
-kops has the concept of "instance groups", which are a group of similar machines.  On AWS, they map to
-an AutoScalingGroup.
+The `InstanceGroup` resource represents a group of similar machines typically provisioned in the same availability zone. On AWS, instance groups map directly to an autoscaling group.
 
-By default, a cluster has:
+The complete list of keys can be found at the [InstanceGroup](https://pkg.go.dev/k8s.io/kops/pkg/apis/kops#InstanceGroupSpec) reference page. 
 
-* An instance group called `nodes` spanning all the zones; these instances are your workers.
-* One instance group for each master zone, called `master-<zone>` (e.g. `master-us-east-1c`).  These normally have
-  minimum size and maximum size = 1, so they will run a single instance.  We do this so that the cloud will
-  always relaunch masters, even if everything is terminated at once.  We have an instance group per zone
-  because we need to force the cloud to run an instance in every zone, so we can mount the master volumes - we
-  cannot do that across zones.
+You can also find concrete use cases for the configurations on the [Instance Group operations page](instance_groups.md)
 
-## Listing instance groups
+On this page, we will expand on the more important configuration keys.
 
-`kops get instancegroups`
-```
-NAME                    ROLE    MACHINETYPE     MIN     MAX     ZONES
-master-us-east-1c       Master                  1       1       us-east-1c
-nodes                   Node    t2.medium       2       2
-```
+## cloudLabels
 
-You can also use the `kops get ig` alias.
+If you need to add tags on auto scaling groups or instances (propagate ASG tags), you can add it in the instance group specs with `cloudLabels`. Cloud Labels defined at the cluster spec level will also be inherited.
 
-## Change the instance type in an instance group
-
-First you edit the instance group spec, using `kops edit ig nodes`.  Change the machine type to `t2.large`,
-for example.  Now if you `kops get ig`, you will see the large instance size.  Note though that these changes
-have not yet been applied (this may change soon though!).
-
-To preview the change:
-
-`kops update cluster <clustername>`
-```
-...
-Will modify resources:
-  *awstasks.LaunchConfiguration launchConfiguration/mycluster.mydomain.com
-    InstanceType t2.medium -> t2.large
-```
-
-Presuming you're happy with the change, go ahead and apply it: `kops update cluster <clustername> --yes`
-
-This change will apply to new instances only; if you'd like to roll it out immediately to all the instances
-you have to perform a rolling update.
-
-See a preview with: `kops rolling-update cluster`
-
-Then restart the machines with: `kops rolling-update cluster --yes`
-
-NOTE: rolling-update does not yet perform a real rolling update - it just shuts down machines in sequence with a delay;
- there will be downtime [Issue #37](https://github.com/kubernetes/kops/issues/37)
-We have implemented a new feature that does drain and validate nodes.  This feature is experimental, and you can use the new feature by setting `export KOPS_FEATURE_FLAGS="+DrainAndValidateRollingUpdate"`.
-
-## Resize an instance group
-
-The procedure to resize an instance group works the same way:
-
-* Edit the instance group, set minSize and maxSize to the desired size: `kops edit ig nodes`
-* Preview changes: `kops update cluster <clustername>`
-* Apply changes: `kops update cluster <clustername>  --yes`
-* (you do not need a `rolling-update` when changing instancegroup sizes)
-
-## Changing the root volume size or type
-
-The default volume size for Masters is 64 GB, while the default volume size for a node is 128 GB.
-
-The procedure to resize the root volume works the same way:
-
-* Edit the instance group, set `rootVolumeSize` and/or `rootVolumeType` to the desired values: `kops edit ig nodes`
-* If `rootVolumeType` is set to `io1` then you can define the number of Iops by specifing `rootVolumeIops` (defaults to 100 if not defined)
-* Preview changes: `kops update cluster <clustername>`
-* Apply changes: `kops update cluster <clustername> --yes`
-* Rolling update to update existing instances: `kops rolling-update cluster --yes`
-
-For example, to set up a 200GB gp2 root volume, your InstanceGroup spec might look like:
-
-```
-metadata:
-  creationTimestamp: "2016-07-11T04:14:00Z"
-  name: nodes
+```YAML
 spec:
-  machineType: t2.medium
+  cloudLabels:
+    billing: infra
+    environment: dev
+```
+
+## suspendProcess
+
+Autoscaling groups automatically include multiple [scaling processes](https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-suspend-resume-processes.html#process-types)
+that keep our ASGs healthy.  In some cases, you may want to disable certain scaling activities.
+
+An example of this is if you are running multiple AZs in an ASG while using a Kubernetes Autoscaler.
+The autoscaler will remove specific instances that are not being used. In some cases, the `AZRebalance` process
+will rescale the ASG without warning.
+
+```YAML
+spec:
+  suspendProcesses:
+  - AZRebalance
+```
+
+
+## instanceProtection
+
+Autoscaling groups may scale up or down automatically to balance types of instances, regions, etc.
+[Instance protection](https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-instance-termination.html#instance-protection) prevents the ASG from being scaled in.
+
+```YAML
+spec:
+  instanceProtection: true
+```
+
+## instanceMetadata
+
+By default IMDSv2 are enabled as of kOps 1.22 on new clusters using Kubernetes 1.22. The default hop limit is 3 on control plane nodes, and 1 on other roles.
+
+On other versions, you can enable IMDSv2 like this:
+
+```YAML
+spec:
+  instanceMetadata:
+    httpPutResponseHopLimit: 1
+    httpTokens: required
+```
+
+## externalLoadBalancers
+
+Instance groups can be linked to up to 10 load balancers. When attached, any instance launched will
+automatically register itself to the load balancer. For example, if you can create an instance group
+dedicated to running an ingress controller exposed on a
+[NodePort](https://kubernetes.io/docs/concepts/services-networking/service/#type-nodeport), you can
+manually create a load balancer and link it to the instance group. Traffic to the load balancer will now
+automatically go to one of the nodes.
+
+You can specify either `loadBalancerName` to link the instance group to an AWS Classic ELB or you can
+specify `targetGroupArn` to link the instance group to a target group, which are used by Application
+load balancers and Network load balancers.
+
+```YAML
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: k8s.dev.local
+  name: ingress
+spec:
+  machineType: m4.large
   maxSize: 2
   minSize: 2
   role: Node
-  rootVolumeSize: 200
-  rootVolumeType: gp2
+  externalLoadBalancers:
+  - targetGroupArn: arn:aws:elasticloadbalancing:eu-west-1:123456789012:targetgroup/my-ingress-target-group/0123456789abcdef
+  - loadBalancerName: my-elb-classic-load-balancer
 ```
 
-For example, to set up a 200GB io1 root volume with 200 provisioned Iops, your InstanceGroup spec might look like:
+## detailedInstanceMonitoring
 
-```
-metadata:
-  creationTimestamp: "2016-07-11T04:14:00Z"
-  name: nodes
+Detailed monitoring will cause the monitoring data to be available every 1 minute instead of every 5 minutes. [Enabling Detailed Monitoring](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-cloudwatch-new.html). In production environments you may want to consider to enable detailed monitoring for quicker troubleshooting.
+
+**Note: that enabling detailed monitoring is a subject for [charge](https://aws.amazon.com/cloudwatch)**
+
+```YAML
 spec:
-  machineType: t2.medium
-  maxSize: 2
-  minSize: 2
-  role: Node
-  rootVolumeSize: 200
-  rootVolumeType: io1
-  rootVolumeIops: 200
+  detailedInstanceMonitoring: true
 ```
 
-## Creating a new instance group
+## additionalUserData
 
-Suppose you want to add a new group of nodes, perhaps with a different instance type.  You do this using
-`kops create ig <InstanceGroupName>`.  Currently it opens an editor with a skeleton configuration, allowing
-you to edit it before creation.
+kOps utilizes cloud-init to initialize and setup a host at boot time. However in certain cases you may already be leveraging certain features of cloud-init in your infrastructure and would like to continue doing so. More information on cloud-init can be found [here](http://cloudinit.readthedocs.io/en/latest/). 
 
-So the procedure is:
+Additional user-data can be passed to the host provisioning by setting the `additionalUserData` field. A list of valid user-data content-types can be found [here](http://cloudinit.readthedocs.io/en/latest/topics/format.html#mime-multi-part-archive).
 
-* `kops create ig morenodes`, edit and save
-* Preview: `kops update cluster <clustername>`
-* Apply: `kops update cluster <clustername> --yes`
-* (no instances need to be relaunched, so no rolling-update is needed)
+Scripts will be run in alphabetical order as documented [here](https://cloudinit.readthedocs.io/en/latest/topics/modules.html#scripts-per-instance).
 
-## Converting an instance group to use spot instances
-
-Follow the normal procedure for reconfiguring an InstanceGroup, but set the maxPrice property to your bid.
-For example, "0.10" represents a spot-price bid of $0.10 (10 cents) per hour.
-
-Warning: the t2 family is not currently supported with spot pricing.  You'll need to choose a different
-instance type.
-
-An example spec looks like this:
-
-```
-metadata:
-  creationTimestamp: "2016-07-10T15:47:14Z"
-  name: nodes
-spec:
-  machineType: m3.medium
-  maxPrice: "0.1"
-  maxSize: 3
-  minSize: 3
-  role: Node
-```
-
-($0.10 per hour is a huge over-bid for an m3.medium - this is only an example!)
-
-So the procedure is:
-
-* Edit: `kops edit ig nodes`
-* Preview: `kops update cluster <clustername>`
-* Apply: `kops update cluster <clustername> --yes`
-* Rolling-update, only if you want to apply changes immediately: `kops rolling-update cluster`
-
-
-## Adding Taints to an Instance Group
-
-If you're running Kubernetes 1.6.0 or later, you can also control taints in the InstanceGroup.
-The taints property takes a list of strings. The following example would add two taints to an IG,
-using the same `edit` -> `update` -> `rolling-update` process as above.
-
-```
-metadata:
-  creationTimestamp: "2016-07-10T15:47:14Z"
-  name: nodes
-spec:
-  machineType: m3.medium
-  maxSize: 3
-  minSize: 3
-  role: Node
-  taints:
-  - dedicated=gpu:NoSchedule
-  - team=search:PreferNoSchedule
-```
-
-
-## Resizing the master
-
-(This procedure should be pretty familiar by now!)
-
-Your master instance group will probably be called `master-us-west-1c` or something similar.
-
-`kops edit ig master-us-west-1c`
-
-Add or set the machineType:
-
-```
-spec:
-  machineType: m3.large
-```
-
-* Preview changes: `kops update cluster <clustername>`
-
-* Apply changes: `kops update cluster <clustername> --yes`
-
-* Rolling-update, only if you want to apply changes immediately: `kops rolling-update cluster`
-
-If you want to minimize downtime, scale the master ASG up to size 2, then wait for that new master to
-be Ready in `kubectl get nodes`, then delete the old master instance, and scale the ASG back down to size 1.  (A
-future of rolling-update will probably do this automatically)
-
-
-## Deleting an instance group
-
-If you decide you don't need an InstanceGroup any more, you delete it using: `kops delete ig <name>`
-
-Example: `kops delete ig morenodes`
-
-No rolling-update is needed (and note this is not currently graceful, so there may be interruptions to
-workloads where the pods are running on those nodes).
-
-## EBS Volume Optimization
-
-EBS-Optimized instances can be created by setting the following field:
-
-```
-spec:
-  rootVolumeOptimization: true
-```
-
-## Additional user-data for cloud-init
-
-Kops utilizes cloud-init to initialize and setup a host at boot time. However in certain cases you may already be leaveraging certain features of cloud-init in your infrastructure and would like to continue doing so. More information on cloud-init can be found [here](http://cloudinit.readthedocs.io/en/latest/)
-
-
-Aditional user-user data can be passed to the host provisioning by setting the `AdditionalUserData` field. A list of valid user-data content-types can be found [here](http://cloudinit.readthedocs.io/en/latest/topics/format.html#mime-multi-part-archive) 
+Note: Passing additionalUserData in Flatcar-OS is not supported, it results in node not coming up.
 
 Example:
-```
+
+```YAML
 spec:
   additionalUserData:
   - name: myscript.sh
@@ -243,25 +132,172 @@ spec:
               - http://archive.ubuntu.com
 ```
 
-## Add Tags on AWS autoscalling group and instance
+## compressUserData
+{{ kops_feature_table(kops_added_default='1.19') }}
 
-If you need to add tags on auto scaling groups or instnaces (propagate ASG tags), you can add it in the instance group specs with *cloudLabels*.
+Compresses parts of the user-data to save space and help with the size limit 
+in certain clouds. Currently only the Specs in nodeup.sh will be compressed.
 
+```YAML
+spec:
+  compressUserData: true
 ```
-# Exemple for nodes
-apiVersion: kops/v1alpha2
+
+## sysctlParameters
+{{ kops_feature_table(kops_added_default='1.17') }}
+
+To add custom kernel runtime parameters to your instance group, specify the
+`sysctlParameters` field as an array of strings. Each string must take the form
+of `variable=value` the way it would appear in sysctl.conf (see also
+`sysctl(8)` manpage).
+
+Unlike a simple file asset, specifying kernel runtime parameters in this manner
+would correctly invoke `sysctl --system` automatically for you to apply said
+parameters.
+
+For example:
+
+```YAML
+apiVersion: kops.k8s.io/v1alpha2
 kind: InstanceGroup
 metadata:
-  labels: 
-    kops.k8s.io/cluster: k8s.dev.local
   name: nodes
 spec:
-  cloudLabels:
-    billing: infra
-    environment: dev
-  associatePublicIp: false
-  machineType: m4.xlarge
-  maxSize: 20
+  sysctlParameters:
+    - fs.pipe-user-pages-soft=524288
+    - net.ipv4.tcp_keepalive_time=200
+```
+
+which would end up in a drop-in file on nodes of the instance group in question.
+
+## mixedInstancesPolicy (AWS Only)
+
+A Mixed Instances Policy utilizing EC2 Spot and the `capacity-optimized` allocation strategy allows an EC2 Autoscaling Group to select the instance types with the highest capacity. This reduces the chance of a spot interruption on your instance group. 
+
+Instance groups with a mixedInstancesPolicy can be generated with the `kops toolbox instance-selector` command. 
+The instance-selector accepts user supplied resource parameters like vcpus, memory, and much more to dynamically select instance types that match your criteria. 
+
+```bash
+kops toolbox instance-selector --vcpus 4 --flexible --usage-class spot --instance-group-name spotgroup
+```
+
+```yaml
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: spot.k8s.local
+  name: spotgroup
+spec:
+  image: 099720109477/ubuntu/images/hvm-ssd/ubuntu-focal-20.04-amd64-server-20200528
+  machineType: c3.xlarge
+  maxSize: 15
   minSize: 2
+  mixedInstancesPolicy:
+    instances:
+    - c3.xlarge
+    - c4.xlarge
+    - c5.xlarge
+    - c5a.xlarge
+    onDemandAboveBase: 0
+    onDemandBase: 0
+    spotAllocationStrategy: capacity-optimized
+  nodeLabels:
+    kops.k8s.io/instancegroup: spotgroup
   role: Node
+  subnets:
+  - us-east-1a
+  - us-east-1b
+  - us-east-1c
+```
+
+### Instances
+
+Instances is a list of instance types which we are willing to run in the EC2 Auto Scaling group.
+
+### onDemandAllocationStrategy
+
+Indicates how to allocate instance types to fulfill On-Demand capacity
+
+### onDemandBase
+
+OnDemandBase is the minimum amount of the Auto Scaling group's capacity that must be
+fulfilled by On-Demand Instances. This base portion is provisioned first as your group scales.
+
+### onDemandAboveBase
+
+OnDemandAboveBase controls the percentages of On-Demand Instances and Spot Instances for your
+additional capacity beyond OnDemandBase. The range is 0–100. The default value is 100. If you
+leave this parameter set to 100, the percentages are 100% for On-Demand Instances and 0% for
+Spot Instances.
+
+### spotAllocationStrategy
+SpotAllocationStrategy Indicates how to allocate instances across Spot Instance pools.
+
+If the allocation strategy is lowest-price, the Auto Scaling group launches instances using the Spot pools with the lowest price, and evenly allocates your instances across the number of Spot pools that you specify in spotInstancePools. If the allocation strategy is [capacity-optimized](https://aws.amazon.com/blogs/compute/introducing-the-capacity-optimized-allocation-strategy-for-amazon-ec2-spot-instances/), the Auto Scaling group launches instances using Spot pools that are optimally chosen based on the available Spot capacity.
+https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_InstancesDistribution.html
+
+### spotInstancePools
+Used only when the Spot allocation strategy is lowest-price.
+The number of Spot Instance pools across which to allocate your Spot Instances. The Spot pools are determined from the different instance types in the Overrides array of LaunchTemplate. Default if not set is 2.
+
+### instanceRequirements
+
+{{ kops_feature_table(kops_added_default='1.24') }}
+
+Instead of configuring specific machine types, the InstanceGroup can be configured to use all machine types that satisfy a given set of requirements.
+
+```
+spec:
+  mixedInstancesPolicy:
+    instanceRquirements:
+      cpu:
+        min: "2"
+        max: "16"
+      memory:
+        min: "2G"
+```
+
+Note that burstable instances are always included in the set of eligible instances.
+
+## warmPool (AWS Only)
+
+{{ kops_feature_table(kops_added_default='1.21') }}
+
+A Warm Pool contains pre-initialized EC2 instances that can join the cluster significantly faster than regular instances. These instances run the kOps configuration process, pull known container images, and then shut down. When the ASG needs to scale out it will pull instances from the warm pool if any are available.
+
+You can enable the warm pool by adding the following:
+
+```yaml
+spec:
+  warmPool: {}
+```
+
+This will use the AWS default settings. You can change the pool size like this:
+
+```yaml
+spec:
+  warmPool:
+    minSize: 3
+    maxSize: 10
+```
+
+You can also specify defaults for all instance groups of type Node or APIServer by setting the `warmPool` field in the cluster spec.
+If warm pools are enabled at the cluster spec level, you can disable them at the instance group level by setting `maxSize: 0`.
+
+### Lifecycle hook
+
+By default AWS does not guarantee that the kOps configuration will run to completion. Nor that the instance will timely shut down after completion if the instance is allowed to run that long. In order to guarantee this, a lifecycle hook is needed.
+
+**You have to ensure your metadata API is protected if you enable this. If not, any Pod in the cluster will be able to complete the lifecycle hook with the `ABANDONED` result, preventing any instance from ever joining the cluster.**
+
+The following config will enable the lifecycle hook as well as protect the metadata API from abuse:
+
+```yaml
+spec:
+  warmPool:
+    enableLifecycleHook: true
+  instanceMetadata:
+    httpPutResponseHopLimit: 1
+    httpTokens: required
 ```

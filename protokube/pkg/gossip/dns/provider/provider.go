@@ -17,8 +17,8 @@ limitations under the License.
 package provider
 
 import (
+	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/protokube/pkg/gossip/dns"
-	"k8s.io/kubernetes/federation/pkg/dnsprovider"
 )
 
 type Provider struct {
@@ -41,5 +41,4 @@ func New(dnsView *dns.DNSView) (dnsprovider.Interface, error) {
 	p.zones.dnsView = dnsView
 
 	return p, nil
-
 }

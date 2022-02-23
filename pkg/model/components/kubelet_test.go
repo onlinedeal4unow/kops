@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,35 +20,37 @@ import (
 	"testing"
 
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/pkg/assets"
 )
 
-func buildSpec() *kops.ClusterSpec {
-	spec := kops.ClusterSpec{
-		KubernetesVersion:     "1.6.2",
-		ServiceClusterIPRange: "10.10.0.0/16",
-		Kubelet:               &kops.KubeletConfigSpec{},
+func buildKubeletTestCluster() *kops.Cluster {
+	return &kops.Cluster{
+		Spec: kops.ClusterSpec{
+			KubernetesVersion:     "1.6.2",
+			ServiceClusterIPRange: "10.10.0.0/16",
+			Kubelet:               &kops.KubeletConfigSpec{},
+			Networking:            &kops.NetworkingSpec{},
+		},
 	}
-
-	return &spec
 }
 
-func buildOptions(spec *kops.ClusterSpec) error {
-	ab := assets.NewAssetBuilder(nil)
+func buildOptions(cluster *kops.Cluster) error {
+	ab := assets.NewAssetBuilder(cluster, false)
 
-	ver, err := KubernetesVersion(spec)
+	ver, err := util.ParseKubernetesVersion(cluster.Spec.KubernetesVersion)
 	if err != nil {
 		return err
 	}
 
 	builder := KubeletOptionsBuilder{
-		Context: &OptionsContext{
+		OptionsContext: &OptionsContext{
 			AssetBuilder:      ab,
 			KubernetesVersion: *ver,
 		},
 	}
 
-	err = builder.BuildOptions(spec)
+	err = builder.BuildOptions(&cluster.Spec)
 	if err != nil {
 		return nil
 	}
@@ -56,45 +58,32 @@ func buildOptions(spec *kops.ClusterSpec) error {
 	return nil
 }
 
-func TestFeatureGates(t *testing.T) {
-	spec := buildSpec()
-	err := buildOptions(spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	gates := spec.Kubelet.FeatureGates
-	if gates["ExperimentalCriticalPodAnnotation"] != "true" {
-		t.Errorf("ExperimentalCriticalPodAnnotation feature gate should be enabled by default")
-	}
-}
-
 func TestFeatureGatesKubernetesVersion(t *testing.T) {
-	spec := buildSpec()
-	spec.KubernetesVersion = "1.4.0"
-	err := buildOptions(spec)
+	cluster := buildKubeletTestCluster()
+	cluster.Spec.KubernetesVersion = "1.17.0"
+	err := buildOptions(cluster)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	gates := spec.Kubelet.FeatureGates
+	gates := cluster.Spec.Kubelet.FeatureGates
 	if _, found := gates["ExperimentalCriticalPodAnnotation"]; found {
-		t.Errorf("ExperimentalCriticalPodAnnotation feature gate should not be added on Kubernetes < 1.5.2")
+		t.Errorf("ExperimentalCriticalPodAnnotation feature gate should not be added on Kubernetes >= 1.16.0")
 	}
 }
 
 func TestFeatureGatesOverride(t *testing.T) {
-	spec := buildSpec()
-	spec.Kubelet.FeatureGates = map[string]string{
+	cluster := buildKubeletTestCluster()
+	cluster.Spec.Kubelet.FeatureGates = map[string]string{
 		"ExperimentalCriticalPodAnnotation": "false",
 	}
 
-	err := buildOptions(spec)
+	err := buildOptions(cluster)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	gates := spec.Kubelet.FeatureGates
+	gates := cluster.Spec.Kubelet.FeatureGates
 	if gates["ExperimentalCriticalPodAnnotation"] != "false" {
 		t.Errorf("ExperimentalCriticalPodAnnotation feature should be disalbled")
 	}

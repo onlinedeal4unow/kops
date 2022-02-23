@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,17 +17,20 @@ limitations under the License.
 package models
 
 import (
+	"embed"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
 	"path"
-	"strings"
-
-	_ "github.com/google/cadvisor/pages/static"
 
 	"k8s.io/kops/util/pkg/vfs"
 )
 
 var ReadOnlyError = errors.New("AssetPath is read-only")
+
+//go:embed cloudup
+var content embed.FS
 
 type AssetPath struct {
 	location string
@@ -49,37 +52,44 @@ func (p *AssetPath) Join(relativePath ...string) vfs.Path {
 	return &AssetPath{location: joined}
 }
 
-func (p *AssetPath) WriteFile(data []byte, acl vfs.ACL) error {
+func (p *AssetPath) WriteFile(data io.ReadSeeker, acl vfs.ACL) error {
 	return ReadOnlyError
 }
 
-func (p *AssetPath) CreateFile(data []byte, acl vfs.ACL) error {
+func (p *AssetPath) CreateFile(data io.ReadSeeker, acl vfs.ACL) error {
 	return ReadOnlyError
 }
 
-func (p *AssetPath) ReadFile() ([]byte, error) {
-	data, err := Asset(p.location)
+// WriteTo implements io.WriterTo
+func (p *AssetPath) WriteTo(out io.Writer) (int64, error) {
+	data, err := p.ReadFile()
 	if err != nil {
-		// Yuk
-		if strings.Contains(err.Error(), "not found") {
-			return nil, os.ErrNotExist
-		}
+		return 0, err
+	}
+	n, err := out.Write(data)
+	return int64(n), err
+}
+
+// ReadFile implements Path::ReadFile
+func (p *AssetPath) ReadFile() ([]byte, error) {
+	data, err := content.ReadFile(p.location)
+	if _, ok := err.(*fs.PathError); ok {
+		return nil, os.ErrNotExist
 	}
 	return data, err
 }
 
 func (p *AssetPath) ReadDir() ([]vfs.Path, error) {
-	files, err := AssetDir(p.location)
+	files, err := content.ReadDir(p.location)
 	if err != nil {
-		// Yuk
-		if strings.Contains(err.Error(), "not found") {
+		if _, ok := err.(*fs.PathError); ok {
 			return nil, os.ErrNotExist
 		}
 		return nil, err
 	}
 	var paths []vfs.Path
 	for _, f := range files {
-		paths = append(paths, NewAssetPath(path.Join(p.location, f)))
+		paths = append(paths, NewAssetPath(path.Join(p.location, f.Name())))
 	}
 	return paths, nil
 }
@@ -94,25 +104,23 @@ func (p *AssetPath) ReadTree() ([]vfs.Path, error) {
 }
 
 func readTree(base string, dest *[]vfs.Path) error {
-	files, err := AssetDir(base)
+	files, err := content.ReadDir(base)
 	if err != nil {
-		// Yuk
-		if strings.Contains(err.Error(), "not found") {
+		if _, ok := err.(*fs.PathError); ok {
 			return os.ErrNotExist
 		}
 		return err
 	}
 	for _, f := range files {
-		p := path.Join(base, f)
-		*dest = append(*dest, NewAssetPath(p))
-
-		// We always assume a directory, but ignore if not found
-		// This is because go-bindata doesn't support FileInfo on directories :-(
-		{
-			err = readTree(p, dest)
-			if err != nil && !os.IsNotExist(err) {
+		p := path.Join(base, f.Name())
+		if f.IsDir() {
+			childFiles, err := NewAssetPath(p).ReadTree()
+			if err != nil {
 				return err
 			}
+			*dest = append(*dest, childFiles...)
+		} else {
+			*dest = append(*dest, NewAssetPath(p))
 		}
 	}
 	return nil
@@ -132,4 +140,8 @@ func (p *AssetPath) String() string {
 
 func (p *AssetPath) Remove() error {
 	return ReadOnlyError
+}
+
+func (p *AssetPath) RemoveAllVersions() error {
+	return p.Remove()
 }

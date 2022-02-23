@@ -18,11 +18,11 @@ package nodetasks
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
-	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/cloudinit"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
@@ -55,10 +55,6 @@ func (e *BindMount) GetName() *string {
 	return fi.String("BindMount-" + e.Mountpoint)
 }
 
-func (e *BindMount) SetName(name string) {
-	glog.Fatalf("SetName not supported for BindMount task")
-}
-
 var _ fi.HasDependencies = &BindMount{}
 
 // GetDependencies implements HasDependencies::GetDependencies
@@ -66,9 +62,7 @@ func (e *BindMount) GetDependencies(tasks map[string]fi.Task) []fi.Task {
 	var deps []fi.Task
 
 	// Requires parent directories to be created
-	for _, v := range findCreatesDirParents(e.Mountpoint, tasks) {
-		deps = append(deps, v)
-	}
+	deps = append(deps, findCreatesDirParents(e.Mountpoint, tasks)...)
 	for _, v := range findCreatesDirMatching(e.Mountpoint, tasks) {
 		if v != e && findTaskInSlice(deps, v) == -1 {
 			deps = append(deps, v)
@@ -100,7 +94,7 @@ func findTaskInSlice(tasks []fi.Task, task fi.Task) int {
 }
 
 func (e *BindMount) Find(c *fi.Context) (*BindMount, error) {
-	mounts, err := ioutil.ReadFile("/proc/self/mountinfo")
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, fmt.Errorf("error reading /proc/self/mountinfo: %v", err)
 	}
@@ -113,7 +107,7 @@ func (e *BindMount) Find(c *fi.Context) (*BindMount, error) {
 		}
 		tokens := strings.Fields(line)
 		if len(tokens) < 8 {
-			glog.V(4).Infof("ignoring mountinfo line: %q", line)
+			klog.V(4).Infof("ignoring mountinfo line: %q", line)
 		}
 
 		mountpoint := tokens[4]
@@ -141,7 +135,7 @@ func (e *BindMount) Find(c *fi.Context) (*BindMount, error) {
 			continue
 		}
 
-		glog.V(8).Infof("candidate mount: %v", line)
+		klog.V(8).Infof("candidate mount: %v", line)
 
 		mountOptions := sets.NewString(strings.Split(tokens[5], ",")...)
 		// exec is inferred from a lack of noexec
@@ -161,11 +155,11 @@ func (e *BindMount) Find(c *fi.Context) (*BindMount, error) {
 		}
 
 		if !mountOptions.HasAll(e.Options...) {
-			glog.V(2).Infof("options mismatch on mount %v", line)
+			klog.V(2).Infof("options mismatch on mount %v", line)
 			continue
 		}
 
-		glog.V(2).Infof("found matching mount %v", line)
+		klog.V(2).Infof("found matching mount %v", line)
 		a := &BindMount{
 			Source:     e.Source,
 			Mountpoint: e.Mountpoint,
@@ -202,13 +196,13 @@ func (e *BindMount) execute(t Executor) error {
 	for _, option := range e.Options {
 		switch option {
 		case "ro":
-			simpleOptions = append(simpleOptions, "ro")
+			simpleOptions = append(simpleOptions, option)
 
 		case "rshared":
 			makeOptions = append(makeOptions, "--make-rshared")
 
-		case "exec":
-			remountOptions = append(remountOptions, "exec")
+		case "exec", "noexec", "suid", "nosuid", "dev", "nodev":
+			remountOptions = append(remountOptions, option)
 
 		default:
 			return fmt.Errorf("unknown option: %q", option)
@@ -227,7 +221,7 @@ func (e *BindMount) execute(t Executor) error {
 		}
 		args = append(args, e.Source, e.Mountpoint)
 
-		glog.Infof("running mount command %s", args)
+		klog.Infof("running mount command %s", args)
 		if output, err := t.CombinedOutput(args); err != nil {
 			return fmt.Errorf("error doing mount %q: %v: %s", strings.Join(args, " "), err, string(output))
 		}
@@ -236,7 +230,7 @@ func (e *BindMount) execute(t Executor) error {
 	if len(remountOptions) != 0 {
 		args := []string{"mount", "-o", "remount," + strings.Join(remountOptions, ","), e.Mountpoint}
 
-		glog.Infof("running mount command %s", args)
+		klog.Infof("running mount command %s", args)
 		if output, err := t.CombinedOutput(args); err != nil {
 			return fmt.Errorf("error doing mount options %q: %v: %s", strings.Join(args, " "), err, string(output))
 		}
@@ -247,7 +241,7 @@ func (e *BindMount) execute(t Executor) error {
 		args = append(args, makeOptions...)
 		args = append(args, e.Mountpoint)
 
-		glog.Infof("running mount command %s", args)
+		klog.Infof("running mount command %s", args)
 		if output, err := t.CombinedOutput(args); err != nil {
 			return fmt.Errorf("error doing mount operation %q: %v: %s", strings.Join(args, " "), err, string(output))
 		}

@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,41 +21,35 @@ import (
 
 	"github.com/spf13/cobra"
 	"k8s.io/kops/cmd/kops/util"
-	"k8s.io/kubernetes/pkg/kubectl/cmd/templates"
-	"k8s.io/kubernetes/pkg/kubectl/util/i18n"
+	"k8s.io/kubectl/pkg/util/i18n"
 )
 
-var (
-	create_secret_long = templates.LongDesc(i18n.T(`
-	Create a secret`))
-
-	create_secret_example = templates.Examples(i18n.T(`
-	# Create an new ssh public key called admin.
-	kops create secret sshpublickey admin -i ~/.ssh/id_rsa.pub \
-		--name k8s-cluster.example.com --state s3://example.com
-
-	kops create secret dockerconfig -f ~/.docker/config.json \
-		--name k8s-cluster.example.com --state s3://example.com
-
-	kops create secret encryptionconfig -f ~/.encryptionconfig.yaml \
-		--name k8s-cluster.example.com --state s3://example.com
-	`))
-
-	create_secret_short = i18n.T(`Create a secret.`)
-)
+var createSecretShort = i18n.T(`Create a secret.`)
 
 func NewCmdCreateSecret(f *util.Factory, out io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "secret",
-		Short:   create_secret_short,
-		Long:    create_secret_long,
-		Example: create_secret_example,
+		Use:   "secret",
+		Short: createSecretShort,
 	}
 
 	// create subcommands
-	cmd.AddCommand(NewCmdCreateSecretPublicKey(f, out))
+	cmd.AddCommand(NewCmdCreateSecretCiliumPassword(f, out))
 	cmd.AddCommand(NewCmdCreateSecretDockerConfig(f, out))
 	cmd.AddCommand(NewCmdCreateSecretEncryptionConfig(f, out))
+	cmd.AddCommand(NewCmdCreateSecretWeavePassword(f, out))
+
+	sshPublicKey := NewCmdCreateSSHPublicKey(f, out)
+	sshPublicKey.Hidden = true
+	innerArgs := sshPublicKey.Args
+	sshPublicKey.Args = func(cmd *cobra.Command, args []string) error {
+		if len(args) > 0 && args[0] == "admin" {
+			// Backwards compatibility
+			args = args[1:]
+		}
+
+		return innerArgs(cmd, args)
+	}
+	cmd.AddCommand(sshPublicKey)
 
 	return cmd
 }

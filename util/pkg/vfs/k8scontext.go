@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,8 +33,7 @@ limitations under the License.
 package vfs
 
 // KubernetesContext is the context for a Kubernetes VFS implementation
-type KubernetesContext struct {
-}
+type KubernetesContext struct{}
 
 // NewKubernetesContext builds a KubernetesContext
 // This will likely take a kubernetes rest client object (or similar) once the implementation is more complete

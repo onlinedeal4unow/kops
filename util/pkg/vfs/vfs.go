@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,39 +18,46 @@ package vfs
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 	"k8s.io/kops/util/pkg/hashing"
 )
 
 // Yet another VFS package
 // If there's a "winning" VFS implementation in go, we should switch to it!
 
-type VFS interface {
-}
+type VFS interface{}
 
 func IsDirectory(p Path) bool {
 	_, err := p.ReadDir()
 	return err == nil
 }
 
-type ACL interface {
-}
+type ACL interface{}
 
 type ACLOracle func(Path) (ACL, error)
 
 // Path is a path in the VFS space, which we can read, write, list etc
 type Path interface {
+	io.WriterTo
 	Join(relativePath ...string) Path
-	ReadFile() ([]byte, error)
 
-	WriteFile(data []byte, acl ACL) error
+	// ReadFile returns the contents of the file, or an error if the file could not be read.
+	// If the file did not exist, err = os.ErrNotExist
+	// As this reads the entire file into memory, consider using WriteTo for bigger files
+	ReadFile() ([]byte, error)
+	WriteFile(data io.ReadSeeker, acl ACL) error
 	// CreateFile writes the file contents, but only if the file does not already exist
-	CreateFile(data []byte, acl ACL) error
+	CreateFile(data io.ReadSeeker, acl ACL) error
 
 	// Remove deletes the file
 	Remove() error
+
+	// RemoveAllVersions completely deletes the file (with all its versions and markers).
+	RemoveAllVersions() error
 
 	// Base returns the base name (last element)
 	Base() string
@@ -62,7 +69,26 @@ type Path interface {
 	ReadDir() ([]Path, error)
 
 	// ReadTree lists all files (recursively) in the subtree rooted at the current Path
+	/// Note: returns only files, not directories
 	ReadTree() ([]Path, error)
+}
+
+// TerraformPath is a Path that can render to Terraform.
+type TerraformPath interface {
+	Path
+	// RenderTerraform renders the file to a TerraformWriter.
+	RenderTerraform(writer *terraformWriter.TerraformWriter, name string, data io.Reader, acl ACL) error
+
+	// TerraformProvider returns provider information
+	TerraformProvider() (*TerraformProvider, error)
+}
+
+// TerraformProvider is a provider definition for a TerraformPath
+type TerraformProvider struct {
+	// Name is the name of the terraform provider
+	Name string
+	// Arguments are additional settings used in the provider definition
+	Arguments map[string]string
 }
 
 type HasHash interface {
@@ -94,7 +120,7 @@ func IsClusterReadable(p Path) bool {
 	}
 
 	switch p.(type) {
-	case *S3Path, *GSPath, *SwiftPath:
+	case *S3Path, *GSPath, *SwiftPath, *FSPath, *VaultPath, *AzureBlobPath:
 		return true
 
 	case *KubernetesPath:
@@ -103,14 +129,11 @@ func IsClusterReadable(p Path) bool {
 	case *SSHPath:
 		return false
 
-	case *FSPath:
-		return false
-
 	case *MemFSPath:
 		return false
 
 	default:
-		glog.Fatalf("IsClusterReadable not implemented for type %T", p)
+		klog.Fatalf("IsClusterReadable not implemented for type %T", p)
 		return false
 	}
 }

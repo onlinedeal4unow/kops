@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "go_default_library",
@@ -11,34 +11,7 @@ go_library(
         "vm.go",
         "vm_instructions.go",
     ],
+    importmap = "k8s.io/kops/vendor/golang.org/x/net/bpf",
     importpath = "golang.org/x/net/bpf",
     visibility = ["//visibility:public"],
-)
-
-go_test(
-    name = "go_default_test",
-    srcs = ["instructions_test.go"],
-    data = glob(["testdata/**"]),
-    importpath = "golang.org/x/net/bpf",
-    library = ":go_default_library",
-)
-
-go_test(
-    name = "go_default_xtest",
-    srcs = [
-        "vm_aluop_test.go",
-        "vm_bpf_test.go",
-        "vm_extension_test.go",
-        "vm_jump_test.go",
-        "vm_load_test.go",
-        "vm_ret_test.go",
-        "vm_scratch_test.go",
-        "vm_test.go",
-    ],
-    data = glob(["testdata/**"]),
-    importpath = "golang.org/x/net/bpf_test",
-    deps = [
-        ":go_default_library",
-        "//vendor/golang.org/x/net/ipv4:go_default_library",
-    ],
 )

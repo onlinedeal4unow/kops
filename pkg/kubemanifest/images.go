@@ -20,12 +20,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 )
 
 type ImageRemapFunction func(image string) (string, error)
 
-func (m *Manifest) RemapImages(mapper ImageRemapFunction) error {
+func (m *Object) RemapImages(mapper ImageRemapFunction) error {
 	visitor := &imageRemapVisitor{
 		mapper: mapper,
 	}
@@ -47,14 +47,16 @@ func (m *imageRemapVisitor) VisitString(path []string, v string, mutator func(st
 		return nil
 	}
 
-	// Deployments look like spec.template.spec.containers.[2].image
-	if n < 3 || path[n-3] != "containers" {
-		glog.Warningf("Skipping likely image field: %s", strings.Join(path, "."))
+	// Deployments/DaemonSets/Jobs/StatefulSets have two image fields
+	//	- spec.template.spec.containers.[2].image
+	//  - spec.template.spec.initContainers.[2].image
+	if n < 3 || (path[n-3] != "containers" && path[n-3] != "initContainers") {
+		klog.Warningf("Skipping likely image field: %s", strings.Join(path, "."))
 		return nil
 	}
 
 	image := v
-	glog.V(4).Infof("Consider image for re-mapping: %q", image)
+	klog.V(4).Infof("Consider image for re-mapping: %q", image)
 	remapped, err := m.mapper(v)
 	if err != nil {
 		return fmt.Errorf("error remapping image %q: %v", image, err)

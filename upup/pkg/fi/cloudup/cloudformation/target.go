@@ -19,19 +19,17 @@ package cloudformation
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"strings"
 	"sync"
 
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 )
 
 type CloudformationTarget struct {
 	Cloud   fi.Cloud
-	Region  string
 	Project string
 
 	outDir string
@@ -41,10 +39,9 @@ type CloudformationTarget struct {
 	resources map[string]*cloudformationResource
 }
 
-func NewCloudformationTarget(cloud fi.Cloud, region, project string, outDir string) *CloudformationTarget {
+func NewCloudformationTarget(cloud fi.Cloud, project string, outDir string) *CloudformationTarget {
 	return &CloudformationTarget{
 		Cloud:     cloud,
-		Region:    region,
 		Project:   project,
 		outDir:    outDir,
 		resources: make(map[string]*cloudformationResource),
@@ -95,7 +92,7 @@ func (t *CloudformationTarget) RenderResource(resourceType string, resourceName 
 func (t *CloudformationTarget) Find(ref *Literal) (interface{}, bool) {
 	key := ref.extractRef()
 	if key == "" {
-		glog.Warningf("Unable to extract ref from %v", ref)
+		klog.Warningf("Unable to extract ref from %v", ref)
 		return nil, false
 	}
 
@@ -148,7 +145,7 @@ func (t *CloudformationTarget) Finish(taskMap map[string]fi.Task) error {
 
 	jsonBytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return fmt.Errorf("error marshalling cloudformation data to json: %v", err)
+		return fmt.Errorf("error marshaling cloudformation data to json: %v", err)
 	}
 
 	files := make(map[string][]byte)
@@ -157,18 +154,18 @@ func (t *CloudformationTarget) Finish(taskMap map[string]fi.Task) error {
 	for relativePath, contents := range files {
 		p := path.Join(t.outDir, relativePath)
 
-		err = os.MkdirAll(path.Dir(p), os.FileMode(0755))
+		err = os.MkdirAll(path.Dir(p), os.FileMode(0o755))
 		if err != nil {
 			return fmt.Errorf("error creating output directory %q: %v", path.Dir(p), err)
 		}
 
-		err = ioutil.WriteFile(p, contents, os.FileMode(0644))
+		err = os.WriteFile(p, contents, os.FileMode(0o644))
 		if err != nil {
 			return fmt.Errorf("error writing cloudformation data to output file %q: %v", p, err)
 		}
 	}
 
-	glog.Infof("Cloudformation output is in %s", t.outDir)
+	klog.Infof("Cloudformation output is in %s", t.outDir)
 
 	return nil
 }

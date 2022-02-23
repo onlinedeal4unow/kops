@@ -17,16 +17,11 @@ limitations under the License.
 package kubemanifest
 
 import (
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 )
 
 // MarkPodAsCritical adds the required annotations for a pod to be considered critical
 func MarkPodAsCritical(pod *v1.Pod) {
-	if pod.ObjectMeta.Annotations == nil {
-		pod.ObjectMeta.Annotations = make(map[string]string)
-	}
-	pod.ObjectMeta.Annotations["scheduler.alpha.kubernetes.io/critical-pod"] = ""
-
 	toleration := v1.Toleration{
 		Key:      "CriticalAddonsOnly",
 		Operator: v1.TolerationOpExists,

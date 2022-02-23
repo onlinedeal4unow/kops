@@ -1,64 +1,51 @@
 # ROADMAP
 
-# 1.9
+## VERSION SUPPORT
+kOps 1.N.x _officially_ supports Kubernetes 1.N.x and prior versions. We understand that those in the community run a wide selection of versions and we do our best to maintain backward compatibility as far as we can. 
 
-## Must-have features
+However, kOps 1.N.x does NOT support Kubernetes 1.N+1.x. Sometimes you get lucky and kOps 1.N will technically install a later version of Kubernetes, but we cannot guarantee or support this situation. As always, we recommend waiting for the official release of kOps with minor version >= the version of Kubernetes you wish to install. Please see the [compatibility matrix](README.md#Compatibility_Matrix) for further questions.
 
-* Support for k8s 1.9
+## RELEASE SCHEDULE
+There is a natural lag between the release of Kubernetes and the corresponding version of kOps that has full support for it. While the first patch versions of a minor Kubernetes release are burning in, the kOps team races to incorporate all the updates needed to release. Once we have both some stability in the upstream version of Kubernetes AND full support in kOps, we will cut a release that includes version specific configuration and a selection of add-ons to match.
 
-## Other features
+In practice, sometimes this means that kOps release lags the upstream release by 1 or more months. We sincerely try to avoid this scenario- we understand how important this project is and respect the need that teams have to maintain their clusters. 
 
-* Use NodeAuthorizer / bootstrap kubeconfigs  [#3551](https://github.com/kubernetes/kops/issues/3551)
+Our goal is to have an official kOps release no later than a month after the corresponding Kubernetes version is released. Please help us achieve this timeline and meet our goals by jumping in and giving us a hand. We always need assistance closing issues, reviewing PRs, and contributing code! Stop by office hours if you're interested. 
 
+A rough outline of the timeline/release cycle with respect to the Kubernetes release follows. We are revising the automation around the release process so that we can get alpha and beta releases out to the community and other developers much faster for testing and to get more eyes on open issues.
 
-# HISTORICAL
+Example release timeline based on Kubernetes quarterly release cycle:
 
-# 1.8
+July 1: Kubernetes 1.W.0 is released.  
+July 7: kOps 1.W.beta1  
+July 21: kOps 1.W.0 released  
+August 15: kOps 1.W+1alpha1  
+August 31: kOps 1.W+1alpha2  
 
-## Must-have features
+... etc
 
-* Support for k8s 1.8
-
-## Other features
-
-* Improved GCE support
-* Support for API aggregation
-
-# 1.7
-
-## Must-have features
-
-* Support for k8s 1.7
- 
-## Other features we are working on in the 1.7 timeframe
-
-* etcd controller to allow moving between versions
-* kops server for better team scenarios
-* support for bare-metal
-* more gossip backends
-* IAM integration
-* more cloud providers
-* promote GCE to stable
-* RBAC policies for all components
-* bringing rolling-update out of alpha
-
-## 1.6
-
-### Must-have features
-
-* Support for k8s 1.6 _done_
-* RBAC enabled by default _yes, but we kept RBAC optional_
-
-## Other features we are working on in the 1.6 timeframe
-
-* Support for GCE _alpha_
-* Support for Google's [Container Optimized OS](https://cloud.google.com/container-optimized-os) (formerly known as GCI) _alpha_
-* Some support for bare-metal _private branches, not merged_
-* Some support for more cloud providers _initial work on vsphere_
-* Some IAM integration _discussions, but no code_
-* Federation made easy _no progress_
-* Authentication made easy _no progress_
-* Integration with kubeadm _kops now uses kubeadm for some RBAC related functionality_
-* CloudFormation integration on AWS _beta_
+September 25: Kubernetes1.W+1.RC-X  
+Oct 1: Kubernetes 1.W+1.0  
+Oct 7: kOps 1.W+1beta1  
+Oct 21: kOps 1.W+1.0  
 
 
+## UPCOMING RELEASES
+
+### kOps 1.17
+
+* Full support for Kubernetes 1.17
+
+### kOps 1.18
+
+* Full support for Kubernetes 1.18
+* Support for Containerd as an alternate container runtime
+* Surging and greater parallelism in rolling updates
+
+## UPCOMING FEATURES
+NB: These are features that are in process and may be introduced behind flags or in alpha capacity but are not explicitly targeting specific releases. 
+
+* Documentation revamp that is closer to k8s.io: Stories and walkthroughs of common scenarios, restructure and update information
+* Additional cloud provider support: spotinst, aliyun, azure...?
+* Revisit recommended base cluster configurations to get them modernized. Update recommendations and defaults for instances, disks, etc, 
+* Improved node bootstrapping

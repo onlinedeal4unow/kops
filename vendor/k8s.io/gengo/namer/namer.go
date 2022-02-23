@@ -17,10 +17,23 @@ limitations under the License.
 package namer
 
 import (
+	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"k8s.io/gengo/types"
+)
+
+const (
+	// GoSeperator is used to split go import paths.
+	// Forward slash is used instead of filepath.Seperator because it is the
+	// only universally-accepted path delimiter and the only delimiter not
+	// potentially forbidden by Go compilers. (In particular gc does not allow
+	// the use of backslashes in import paths.)
+	// See https://golang.org/ref/spec#Import_declarations.
+	// See also https://github.com/kubernetes/gengo/issues/83#issuecomment-367040772.
+	GoSeperator = "/"
 )
 
 // Returns whether a name is a private Go name.
@@ -187,7 +200,7 @@ var (
 
 // filters out unwanted directory names and sanitizes remaining names.
 func (ns *NameStrategy) filterDirs(path string) []string {
-	allDirs := strings.Split(path, string(filepath.Separator))
+	allDirs := strings.Split(path, GoSeperator)
 	dirs := make([]string, 0, len(allDirs))
 	for _, p := range allDirs {
 		if ns.IgnoreWords == nil || !ns.IgnoreWords[p] {
@@ -233,6 +246,12 @@ func (ns *NameStrategy) Name(t *types.Type) string {
 	case types.Slice:
 		name = ns.Join(ns.Prefix, []string{
 			"Slice",
+			ns.removePrefixAndSuffix(ns.Name(t.Elem)),
+		}, ns.Suffix)
+	case types.Array:
+		name = ns.Join(ns.Prefix, []string{
+			"Array",
+			ns.removePrefixAndSuffix(fmt.Sprintf("%d", t.Len)),
 			ns.removePrefixAndSuffix(ns.Name(t.Elem)),
 		}, ns.Suffix)
 	case types.Pointer:
@@ -329,6 +348,9 @@ func (r *rawNamer) Name(t *types.Type) string {
 		name = "map[" + r.Name(t.Key) + "]" + r.Name(t.Elem)
 	case types.Slice:
 		name = "[]" + r.Name(t.Elem)
+	case types.Array:
+		l := strconv.Itoa(int(t.Len))
+		name = "[" + l + "]" + r.Name(t.Elem)
 	case types.Pointer:
 		name = "*" + r.Name(t.Elem)
 	case types.Struct:

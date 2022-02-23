@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors.
+Copyright 2019 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,17 +20,18 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/golang/glog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=VPCDHCPOptionsAssociation
+// +kops:fitask
 type VPCDHCPOptionsAssociation struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	VPC         *VPC
 	DHCPOptions *DHCPOptions
@@ -86,7 +87,7 @@ func (s *VPCDHCPOptionsAssociation) CheckChanges(a, e, changes *VPCDHCPOptionsAs
 
 func (_ *VPCDHCPOptionsAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *VPCDHCPOptionsAssociation) error {
 	if changes.DHCPOptions != nil {
-		glog.V(2).Infof("calling EC2 AssociateDhcpOptions")
+		klog.V(2).Infof("calling EC2 AssociateDhcpOptions")
 		request := &ec2.AssociateDhcpOptionsInput{
 			VpcId:         e.VPC.ID,
 			DhcpOptionsId: e.DHCPOptions.ID,
@@ -102,8 +103,8 @@ func (_ *VPCDHCPOptionsAssociation) RenderAWS(t *awsup.AWSAPITarget, a, e, chang
 }
 
 type terraformVPCDHCPOptionsAssociation struct {
-	VPCID         *terraform.Literal `json:"vpc_id"`
-	DHCPOptionsID *terraform.Literal `json:"dhcp_options_id"`
+	VPCID         *terraformWriter.Literal `cty:"vpc_id"`
+	DHCPOptionsID *terraformWriter.Literal `cty:"dhcp_options_id"`
 }
 
 func (_ *VPCDHCPOptionsAssociation) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *VPCDHCPOptionsAssociation) error {
