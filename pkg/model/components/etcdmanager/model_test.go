@@ -18,10 +18,12 @@ package etcdmanager
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"k8s.io/kops/pkg/assets"
 	"k8s.io/kops/pkg/model"
+	"k8s.io/kops/pkg/model/iam"
 	"k8s.io/kops/pkg/testutils"
 	"k8s.io/kops/upup/pkg/fi"
 )
@@ -29,8 +31,8 @@ import (
 func Test_RunEtcdManagerBuilder(t *testing.T) {
 	tests := []string{
 		"tests/minimal",
+		"tests/pollinterval",
 		"tests/proxy",
-		"tests/old_versions_mount_hosts",
 		"tests/overwrite_settings",
 	}
 	for _, basedir := range tests {
@@ -48,7 +50,7 @@ func Test_RunEtcdManagerBuilder(t *testing.T) {
 
 			builder := EtcdManagerBuilder{
 				KopsModelContext: kopsModelContext,
-				AssetBuilder:     assets.NewAssetBuilder(kopsModelContext.Cluster, ""),
+				AssetBuilder:     assets.NewAssetBuilder(kopsModelContext.Cluster, false),
 			}
 
 			if err := builder.Build(context); err != nil {
@@ -56,7 +58,7 @@ func Test_RunEtcdManagerBuilder(t *testing.T) {
 				return
 			}
 
-			testutils.ValidateTasks(t, basedir, context)
+			testutils.ValidateTasks(t, filepath.Join(basedir, "tasks.yaml"), context)
 		})
 	}
 }
@@ -76,8 +78,8 @@ func LoadKopsModelContext(basedir string) (*model.KopsModelContext, error) {
 	}
 
 	kopsContext := &model.KopsModelContext{
-		Cluster:        spec.Cluster,
-		InstanceGroups: spec.InstanceGroups,
+		IAMModelContext: iam.IAMModelContext{Cluster: spec.Cluster},
+		InstanceGroups:  spec.InstanceGroups,
 	}
 
 	return kopsContext, nil

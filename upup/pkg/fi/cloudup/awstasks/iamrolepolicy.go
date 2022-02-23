@@ -17,27 +17,29 @@ limitations under the License.
 package awstasks
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
-
-	"encoding/json"
 	"net/url"
+	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/iam"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/diff"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/cloudformation"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
-//go:generate fitask -type=IAMRolePolicy
+// +kops:fitask
 type IAMRolePolicy struct {
 	ID        *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	Name *string
 	Role *IAMRole
@@ -64,7 +66,7 @@ func (e *IAMRolePolicy) Find(c *fi.Context) (*IAMRolePolicy, error) {
 
 		response, err := cloud.IAM().ListAttachedRolePolicies(request)
 		if awsErr, ok := err.(awserr.Error); ok {
-			if awsErr.Code() == "NoSuchEntity" {
+			if awsErr.Code() == iam.ErrCodeNoSuchEntityException {
 				return nil, nil
 			}
 
@@ -77,6 +79,7 @@ func (e *IAMRolePolicy) Find(c *fi.Context) (*IAMRolePolicy, error) {
 				policies = append(policies, aws.StringValue(policy.PolicyArn))
 			}
 		}
+		sort.Strings(policies)
 
 		actual.ID = e.ID
 		actual.Name = e.Name
@@ -95,7 +98,7 @@ func (e *IAMRolePolicy) Find(c *fi.Context) (*IAMRolePolicy, error) {
 
 	response, err := cloud.IAM().GetRolePolicy(request)
 	if awsErr, ok := err.(awserr.Error); ok {
-		if awsErr.Code() == "NoSuchEntity" {
+		if awsErr.Code() == iam.ErrCodeNoSuchEntityException {
 			return nil, nil
 		}
 	}
@@ -115,7 +118,19 @@ func (e *IAMRolePolicy) Find(c *fi.Context) (*IAMRolePolicy, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error parsing PolicyDocument for IAMRolePolicy %q: %v", aws.StringValue(e.Name), err)
 		}
-		actual.PolicyDocument = fi.WrapResource(fi.NewStringResource(policy))
+
+		// Reformat the PolicyDocument by unmarshaling and re-marshaling to JSON.
+		// This will make it possible to compare it when using CloudFormation.
+		var jsonData interface{}
+		err = json.Unmarshal([]byte(policy), &jsonData)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing cloudformation policy document from JSON: %v", err)
+		}
+		jsonBytes, err := json.MarshalIndent(jsonData, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("error converting cloudformation policy document to JSON: %v", err)
+		}
+		actual.PolicyDocument = fi.NewStringResource(string(jsonBytes))
 	}
 
 	actual.Name = p.PolicyName
@@ -219,7 +234,7 @@ func (_ *IAMRolePolicy) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *IAMRoleP
 		klog.V(2).Infof("Deleting role policy %s/%s", aws.StringValue(e.Role.Name), aws.StringValue(e.Name))
 		_, err = t.Cloud.IAM().DeleteRolePolicy(request)
 		if err != nil {
-			if awsup.AWSErrorCode(err) == "NoSuchEntity" {
+			if awsup.AWSErrorCode(err) == iam.ErrCodeNoSuchEntityException {
 				// Already deleted
 				klog.V(2).Infof("Got NoSuchEntity deleting role policy %s/%s; assuming does not exist", aws.StringValue(e.Role.Name), aws.StringValue(e.Name))
 				return nil
@@ -264,6 +279,7 @@ func (_ *IAMRolePolicy) RenderAWS(t *awsup.AWSAPITarget, a, e, changes *IAMRoleP
 
 		_, err = t.Cloud.IAM().PutRolePolicy(request)
 		if err != nil {
+			klog.V(2).Infof("PutRolePolicy RoleName=%s PolicyName=%s: %s", aws.StringValue(e.Role.Name), aws.StringValue(e.Name), policy)
 			return fmt.Errorf("error creating/updating IAMRolePolicy: %v", err)
 		}
 	}
@@ -276,14 +292,23 @@ func (e *IAMRolePolicy) policyDocumentString() (string, error) {
 	if e.PolicyDocument == nil {
 		return "", nil
 	}
-	return fi.ResourceAsString(e.PolicyDocument)
+
+	policy, err := fi.ResourceAsString(e.PolicyDocument)
+	if err != nil {
+		return "", err
+	}
+	policySize := len(strings.Join(strings.Fields(policy), ""))
+	if policySize > 10240 {
+		return "", fmt.Errorf("policy size was %d. Policy cannot exceed 10240 bytes", policySize)
+	}
+	return policy, err
 }
 
 type terraformIAMRolePolicy struct {
-	Name           *string            `json:"name,omitempty" cty:"name"`
-	Role           *terraform.Literal `json:"role" cty:"role"`
-	PolicyDocument *terraform.Literal `json:"policy,omitempty" cty:"policy"`
-	PolicyArn      *string            `json:"policy_arn,omitempty" cty:"policy_arn"`
+	Name           *string                  `cty:"name"`
+	Role           *terraformWriter.Literal `cty:"role"`
+	PolicyDocument *terraformWriter.Literal `cty:"policy"`
+	PolicyArn      *string                  `cty:"policy_arn"`
 }
 
 func (_ *IAMRolePolicy) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *IAMRolePolicy) error {
@@ -317,7 +342,7 @@ func (_ *IAMRolePolicy) RenderTerraform(t *terraform.TerraformTarget, a, e, chan
 		return nil
 	}
 
-	policy, err := t.AddFile("aws_iam_role_policy", *e.Name, "policy", e.PolicyDocument)
+	policy, err := t.AddFileResource("aws_iam_role_policy", *e.Name, "policy", e.PolicyDocument, false)
 	if err != nil {
 		return fmt.Errorf("error rendering PolicyDocument: %v", err)
 	}
@@ -331,8 +356,8 @@ func (_ *IAMRolePolicy) RenderTerraform(t *terraform.TerraformTarget, a, e, chan
 	return t.RenderResource("aws_iam_role_policy", *e.Name, tf)
 }
 
-func (e *IAMRolePolicy) TerraformLink() *terraform.Literal {
-	return terraform.LiteralSelfLink("aws_iam_role_policy", *e.Name)
+func (e *IAMRolePolicy) TerraformLink() *terraformWriter.Literal {
+	return terraformWriter.LiteralSelfLink("aws_iam_role_policy", *e.Name)
 }
 
 type cloudformationIAMRolePolicy struct {

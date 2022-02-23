@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	storage "google.golang.org/api/storage/v1"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/acls"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi/cloudup"
@@ -29,8 +29,7 @@ import (
 )
 
 // gcsAclStrategy is the AclStrategy for objects written to google cloud storage
-type gcsAclStrategy struct {
-}
+type gcsAclStrategy struct{}
 
 var _ acls.ACLStrategy = &gcsAclStrategy{}
 
@@ -59,7 +58,7 @@ func (s *gcsAclStrategy) GetACL(p vfs.Path, cluster *kops.Cluster) (vfs.ACL, err
 	}
 
 	if bucketPolicyOnly {
-		klog.V(2).Infof("bucket gs://%s has bucket-policy only; won't try to set ACLs", bucketName)
+		klog.Infof("bucket gs://%s has bucket-policy only; won't try to set ACLs", bucketName)
 		return nil, nil
 	}
 

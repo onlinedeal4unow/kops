@@ -21,8 +21,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/blang/semver"
-	"k8s.io/klog"
+	"github.com/blang/semver/v4"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/channels/pkg/api"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/vfs"
@@ -57,20 +57,6 @@ func ParseAddons(name string, location *url.URL, data []byte) (*Addons, error) {
 		}
 	}
 
-	for _, addon := range apiObject.Spec.Addons {
-		if addon != nil && addon.Version != nil && *addon.Version != "" {
-			name := apiObject.ObjectMeta.Name
-			if addon.Name != nil {
-				name = *addon.Name
-			}
-
-			_, err := semver.ParseTolerant(*addon.Version)
-			if err != nil {
-				return nil, fmt.Errorf("addon %q has unparseable version %q: %v", name, *addon.Version, err)
-			}
-		}
-	}
-
 	return &Addons{ChannelName: name, ChannelLocation: *location, APIObject: apiObject}, nil
 }
 
@@ -88,7 +74,7 @@ func (a *Addons) GetCurrent(kubernetesVersion semver.Version) (*AddonMenu, error
 		name := addon.Name
 
 		existing := menu.Addons[name]
-		if existing == nil || addon.ChannelVersion().replaces(existing.ChannelVersion()) {
+		if existing == nil || addon.ChannelVersion().replaces(name, existing.ChannelVersion()) {
 			menu.Addons[name] = addon
 		}
 	}

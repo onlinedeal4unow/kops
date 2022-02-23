@@ -60,9 +60,14 @@ func BuildSystemComponentEnvVars(spec *kops.ClusterSpec) EnvVars {
 	vars.addEnvVariableIfExist("OS_PASSWORD")
 	vars.addEnvVariableIfExist("OS_AUTH_URL")
 	vars.addEnvVariableIfExist("OS_REGION_NAME")
+	vars.addEnvVariableIfExist("OS_APPLICATION_CREDENTIAL_ID")
+	vars.addEnvVariableIfExist("OS_APPLICATION_CREDENTIAL_SECRET")
 
 	// Digital Ocean related values.
 	vars.addEnvVariableIfExist("DIGITALOCEAN_ACCESS_TOKEN")
+
+	// Azure related values.
+	vars.addEnvVariableIfExist("AZURE_STORAGE_ACCOUNT")
 
 	return vars
 }

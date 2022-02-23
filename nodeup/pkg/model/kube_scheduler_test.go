@@ -23,14 +23,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/configbuilder"
+	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/util/pkg/architectures"
 )
 
 func TestParseDefault(t *testing.T) {
 	expect := []byte(
 		`apiVersion: kubescheduler.config.k8s.io/v1alpha2
-kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: /var/lib/kube-scheduler/kubeconfig
+kind: KubeSchedulerConfiguration
 `)
 
 	s := &kops.KubeSchedulerConfig{}
@@ -48,11 +50,11 @@ clientConnection:
 func TestParse(t *testing.T) {
 	expect := []byte(
 		`apiVersion: kubescheduler.config.k8s.io/v1alpha2
-kind: KubeSchedulerConfiguration
 clientConnection:
   burst: 100
   kubeconfig: /var/lib/kube-scheduler/kubeconfig
   qps: 3.1
+kind: KubeSchedulerConfiguration
 `)
 	qps, _ := resource.ParseQuantity("3.1")
 
@@ -66,4 +68,26 @@ clientConnection:
 	if !bytes.Equal(yaml, expect) {
 		t.Errorf("unexpected result: \n%s, expected: \n%s", yaml, expect)
 	}
+}
+
+func TestKubeSchedulerBuilder(t *testing.T) {
+	RunGoldenTest(t, "tests/golden/minimal", "kube-scheduler", func(nodeupModelContext *NodeupModelContext, target *fi.ModelBuilderContext) error {
+		builder := KubeSchedulerBuilder{NodeupModelContext: nodeupModelContext}
+		return builder.Build(target)
+	})
+}
+
+func TestKubeSchedulerBuilderAMD64(t *testing.T) {
+	RunGoldenTest(t, "tests/golden/side-loading", "kube-scheduler-amd64", func(nodeupModelContext *NodeupModelContext, target *fi.ModelBuilderContext) error {
+		builder := KubeSchedulerBuilder{NodeupModelContext: nodeupModelContext}
+		return builder.Build(target)
+	})
+}
+
+func TestKubeSchedulerBuilderARM64(t *testing.T) {
+	RunGoldenTest(t, "tests/golden/side-loading", "kube-scheduler-arm64", func(nodeupModelContext *NodeupModelContext, target *fi.ModelBuilderContext) error {
+		builder := KubeSchedulerBuilder{NodeupModelContext: nodeupModelContext}
+		builder.Architecture = architectures.ArchitectureArm64
+		return builder.Build(target)
+	})
 }

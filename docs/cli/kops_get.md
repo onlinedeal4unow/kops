@@ -20,10 +20,7 @@ kops get [flags]
 ### Examples
 
 ```
-  # Get all clusters in a state store
-  kops get clusters
-  
-  # Get a cluster and its instancegroups
+  # Get a cluster and its instance groups
   kops get k8s-cluster.example.com
   
   # Get a cluster and its instancegroups' YAML desired configuration
@@ -31,25 +28,19 @@ kops get [flags]
   
   # Save a cluster and its instancegroups' desired configuration to YAML file
   kops get k8s-cluster.example.com -o yaml > cluster-desired-config.yaml
-  
-  # Get a secret
-  kops get secrets kube -oplaintext
-  
-  # Get the admin password for a cluster
-  kops get secrets admin -oplaintext
 ```
 
 ### Options
 
 ```
   -h, --help            help for get
-  -o, --output string   output format.  One of: table, yaml, json (default "table")
+  -o, --output string   output format. One of: table, yaml, json (default "table")
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -58,6 +49,7 @@ kops get [flags]
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -68,8 +60,12 @@ kops get [flags]
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
+* [kops get assets](kops_get_assets.md)	 - Display assets for cluster.
 * [kops get clusters](kops_get_clusters.md)	 - Get one or many clusters.
-* [kops get instancegroups](kops_get_instancegroups.md)	 - Get one or many instancegroups
+* [kops get instancegroups](kops_get_instancegroups.md)	 - Get one or many instance groups.
+* [kops get instances](kops_get_instances.md)	 - Display cluster instances.
+* [kops get keypairs](kops_get_keypairs.md)	 - Get one or many keypairs.
 * [kops get secrets](kops_get_secrets.md)	 - Get one or many secrets.
+* [kops get sshpublickeys](kops_get_sshpublickeys.md)	 - Get one or many secrets.
 

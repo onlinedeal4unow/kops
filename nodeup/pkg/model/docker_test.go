@@ -17,159 +17,21 @@ limitations under the License.
 package model
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/blang/semver/v4"
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/testutils"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/util/pkg/hashing"
+	"k8s.io/kops/util/pkg/distributions"
 )
 
-func TestDockerPackageNames(t *testing.T) {
-	for _, dockerVersion := range dockerVersions {
-		if dockerVersion.PlainBinary {
-			continue
-		}
-
-		sanityCheckPackageName(t, dockerVersion.Source, dockerVersion.Version, dockerVersion.Name)
-
-		for k, p := range dockerVersion.ExtraPackages {
-			sanityCheckPackageName(t, p.Source, p.Version, k)
-		}
-	}
-}
-
-func sanityCheckPackageName(t *testing.T, u string, version string, name string) {
-	filename := u
-	lastSlash := strings.LastIndex(filename, "/")
-	if lastSlash != -1 {
-		filename = filename[lastSlash+1:]
-	}
-
-	expectedNames := []string{}
-	// Match known RPM formats
-	for _, v := range []string{"-1.", "-2.", "-3.", "-3.2."} {
-		for _, d := range []string{"el7", "el7.centos", "el7_6"} {
-			for _, a := range []string{"noarch", "x86_64"} {
-				expectedNames = append(expectedNames, name+"-"+version+v+d+"."+a+".rpm")
-			}
-		}
-	}
-
-	// Match known DEB formats
-	for _, a := range []string{"amd64", "armhf"} {
-		expectedNames = append(expectedNames, name+"_"+version+"_"+a+".deb")
-		// Not entirely clear why some (docker) debian packages have this '5:' prefix
-		expectedNames = append(expectedNames, name+"_"+strings.TrimPrefix(version, "5:")+"_"+a+".deb")
-	}
-
-	found := false
-	for _, s := range expectedNames {
-		if s == filename {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("unexpected name=%q, version=%q for %s", name, version, u)
-	}
-}
-
-func TestDockerPackageHashes(t *testing.T) {
-	if os.Getenv("VERIFY_HASHES") == "" {
-		t.Skip("VERIFY_HASHES not set, won't download & verify docker hashes")
-	}
-
-	for _, dockerVersion := range dockerVersions {
-		t.Run(dockerVersion.Source, func(t *testing.T) {
-			if err := verifyPackageHash(dockerVersion.Source, dockerVersion.Hash, dockerVersion.Version); err != nil {
-				t.Errorf("error verifying package %q: %v", dockerVersion.Source, err)
-			}
-
-			for _, p := range dockerVersion.ExtraPackages {
-				if err := verifyPackageHash(p.Source, p.Hash, p.Version); err != nil {
-					t.Errorf("error verifying package %q: %v", p.Source, err)
-				}
-			}
-		})
-	}
-}
-
-func verifyPackageHash(u string, hash string, expectedVersion string) error {
-	name := path.Base(u)
-	p := filepath.Join("/tmp", name)
-
-	expectedHash, err := hashing.FromString(hash)
-	if err != nil {
-		return err
-	}
-
-	if _, err := fi.DownloadURL(u, p, expectedHash); err != nil {
-		return err
-	}
-
-	actualHash, err := hashing.HashAlgorithmSHA1.HashFile(p)
-	if err != nil {
-		return fmt.Errorf("error hashing file: %v", err)
-	}
-
-	if hash != actualHash.Hex() {
-		return fmt.Errorf("hash was %q, expected %q", actualHash.Hex(), hash)
-	}
-
-	if strings.HasSuffix(u, ".deb") {
-		cmd := exec.Command("dpkg-deb", "-I", p)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("error running 'dpkg-deb -I %s': %v", p, err)
-		}
-
-		version := ""
-		for _, line := range strings.Split(string(out), "\n") {
-			line = strings.TrimSpace(line)
-			if !strings.HasPrefix(line, "Version: ") {
-				continue
-			}
-			version += strings.TrimPrefix(line, "Version: ")
-		}
-		if expectedVersion != version {
-			return fmt.Errorf("unexpected version, actual=%q, expected=%q", version, expectedVersion)
-		}
-
-	} else if strings.HasSuffix(u, ".rpm") {
-		cmd := exec.Command("rpm", "-qp", "--queryformat", "%{VERSION}", "--nosignature", p)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("error running rpm %s: %v", strings.Join(cmd.Args, " "), err)
-		}
-
-		version := strings.TrimSpace(string(out))
-		if expectedVersion != version {
-			return fmt.Errorf("unexpected version, actual=%q, expected=%q", version, expectedVersion)
-		}
-	} else if strings.HasSuffix(u, ".tgz") || strings.HasSuffix(u, ".tar.gz") {
-		if expectedVersion != "" {
-			return fmt.Errorf("did not expect version for tgz / tar.gz package")
-		}
-	} else {
-		return fmt.Errorf("unexpected suffix for file (known: .rpm .deb .tar.gz .tgz)")
-	}
-
-	return nil
-}
-
-func TestDockerBuilder_Simple(t *testing.T) {
-	runDockerBuilderTest(t, "simple")
-}
-
-func TestDockerBuilder_18_06_3(t *testing.T) {
-	runDockerBuilderTest(t, "docker_18.06.3")
+func TestDockerBuilder_19_03_11(t *testing.T) {
+	runDockerBuilderTest(t, "docker_19.03.11")
 }
 
 func TestDockerBuilder_LogFlags(t *testing.T) {
@@ -227,6 +89,26 @@ func TestDockerBuilder_BuildFlags(t *testing.T) {
 			kops.DockerConfig{Bridge: fi.String("br0")},
 			"--bridge=br0",
 		},
+		{
+			kops.DockerConfig{ExecOpt: []string{"native.cgroupdriver=systemd"}},
+			"--exec-opt=native.cgroupdriver=systemd",
+		},
+		{
+			kops.DockerConfig{InsecureRegistries: []string{"registry1", "registry2"}},
+			"--insecure-registry=registry1 --insecure-registry=registry2",
+		},
+		{
+			kops.DockerConfig{DNS: []string{}},
+			"",
+		},
+		{
+			kops.DockerConfig{DNS: []string{"8.8.4.4"}},
+			"--dns=8.8.4.4",
+		},
+		{
+			kops.DockerConfig{DNS: []string{"8.8.4.4", "8.8.8.8"}},
+			"--dns=8.8.4.4 --dns=8.8.8.8",
+		},
 	}
 
 	for _, g := range grid {
@@ -242,14 +124,63 @@ func TestDockerBuilder_BuildFlags(t *testing.T) {
 }
 
 func runDockerBuilderTest(t *testing.T, key string) {
+	h := testutils.NewIntegrationTestHarness(t)
+	defer h.Close()
+
+	h.MockKopsVersion("1.18.0")
+	h.SetupMockAWS()
+
 	basedir := path.Join("tests/dockerbuilder/", key)
 
-	nodeUpModelContext, err := BuildNodeupModelContext(basedir)
+	model, err := testutils.LoadModel(basedir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeUpModelContext, err := BuildNodeupModelContext(model)
 	if err != nil {
 		t.Fatalf("error parsing cluster yaml %q: %v", basedir, err)
 		return
 	}
 
+	nodeUpModelContext.Distribution = distributions.DistributionUbuntu2004
+
+	if nodeUpModelContext.Cluster.Spec.Docker.SkipInstall == false {
+		if nodeUpModelContext.Cluster == nil || nodeUpModelContext.Cluster.Spec.Docker == nil || nodeUpModelContext.Cluster.Spec.Docker.Version == nil {
+			t.Fatalf("error finding Docker version")
+			return
+		}
+		dv := fi.StringValue(nodeUpModelContext.Cluster.Spec.Docker.Version)
+		sv, err := semver.ParseTolerant(dv)
+		if err != nil {
+			t.Fatalf("error parsing Docker version %q: %v", dv, err)
+			return
+		}
+		nodeUpModelContext.Assets = fi.NewAssetStore("")
+		if sv.GTE(semver.MustParse("19.3.0")) {
+			nodeUpModelContext.Assets.AddForTest("containerd", "docker/containerd", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("containerd-shim", "docker/containerd-shim", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("ctr", "docker/ctr", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker", "docker/docker", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-init", "docker/docker-init", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-proxy", "docker/docker-proxy", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("dockerd", "docker/dockerd", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("runc", "docker/runc", "testing Docker content")
+		} else {
+			nodeUpModelContext.Assets.AddForTest("docker", "docker/docker", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-containerd", "docker/docker-containerd", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-containerd-ctr", "docker/docker-containerd-ctr", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-containerd-shim", "docker/docker-containerd-shim", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-init", "docker/docker-init", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-proxy", "docker/docker-proxy", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("docker-runc", "docker/docker-runc", "testing Docker content")
+			nodeUpModelContext.Assets.AddForTest("dockerd", "docker/dockerd", "testing Docker content")
+		}
+	}
+
+	if err := nodeUpModelContext.Init(); err != nil {
+		t.Fatalf("error from nodeUpModelContext.Init(): %v", err)
+	}
 	context := &fi.ModelBuilderContext{
 		Tasks: make(map[string]fi.Task),
 	}
@@ -262,5 +193,5 @@ func runDockerBuilderTest(t *testing.T, key string) {
 		return
 	}
 
-	testutils.ValidateTasks(t, basedir, context)
+	testutils.ValidateTasks(t, filepath.Join(basedir, "tasks.yaml"), context)
 }

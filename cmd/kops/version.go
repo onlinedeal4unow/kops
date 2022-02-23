@@ -28,12 +28,12 @@ import (
 
 var (
 	versionLong = templates.LongDesc(i18n.T(`
-	Print the kops version and git SHA.`))
+	Print the kOps version and git SHA.`))
 
 	versionExample = templates.Examples(i18n.T(`
 	kops version`))
 
-	versionShort = i18n.T(`Print the kops version information.`)
+	versionShort = i18n.T(`Print the kOps version information.`)
 )
 
 // NewCmdVersion builds a cobra command for the kops version command
@@ -41,20 +41,18 @@ func NewCmdVersion(f *util.Factory, out io.Writer) *cobra.Command {
 	options := &commands.VersionOptions{}
 
 	cmd := &cobra.Command{
-		Use:     "version",
-		Short:   versionShort,
-		Long:    versionLong,
-		Example: versionExample,
+		Use:               "version",
+		Short:             versionShort,
+		Long:              versionLong,
+		Example:           versionExample,
+		Args:              cobra.NoArgs,
+		ValidArgsFunction: cobra.NoFileCompletions,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return commands.RunVersion(f, out, options)
+		},
 	}
 
-	cmd.Run = func(cmd *cobra.Command, args []string) {
-		err := commands.RunVersion(f, out, options)
-		if err != nil {
-			exitWithError(err)
-		}
-	}
-
-	cmd.Flags().BoolVar(&options.Short, "short", options.Short, "only print the main kops version, useful for scripting")
+	cmd.Flags().BoolVar(&options.Short, "short", options.Short, "only print the main kOps version. Useful for scripting.")
 
 	return cmd
 }

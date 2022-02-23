@@ -111,7 +111,7 @@ aws ec2 describe-images --image-id ami-32705b49 --output table
 ||+----------------------------------+---------------------------------+||
 ```
 
-Also, you can obtaing the image owner/name using the following aws-cli command:
+Also, you can obtain the image owner/name using the following aws-cli command:
 
 ```bash
 aws ec2 describe-images --region=us-east-1 --owner=595879546273 \
@@ -196,7 +196,7 @@ If you don't want KOPS to auto-select the instance type, you can use the followi
 
 But, before doing that, always ensure the instance types are available on your desired AZ.
 
-NOTE: More arguments and kops commands are described [here](../cli/kops.md).
+NOTE: More arguments and kOps commands are described [here](../cli/kops.md).
 
 Let's continue exploring our cluster, but now with "kubectl":
 

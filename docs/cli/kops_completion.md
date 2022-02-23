@@ -3,53 +3,25 @@
 
 ## kops completion
 
-Output shell completion code for the given shell (bash or zsh).
+generate the autocompletion script for the specified shell
 
 ### Synopsis
 
-Output shell completion code for the specified shell (bash or zsh). The shell code must be evaluated to provide interactive completion of kops commands.  This can be done by sourcing it from the .bash_profile.
 
- Note: this requires the bash-completion framework, which is not installed by default on Mac. Once installed, bash_completion must be evaluated.  This can be done by adding the following line to the .bash_profile
+Generate the autocompletion script for kops for the specified shell.
+See each sub-command's help for details on how to use the generated script.
 
- Note for zsh users: zsh completions are only supported in versions of zsh >= 5.2
-
-```
-kops completion [flags]
-```
-
-### Examples
-
-```
-  # For OSX users install bash completion using homebrew
-  brew install bash-completion
-  source $(brew --prefix)/etc/bash_completion
-  
-  # Bash completion support
-  printf "source $(brew --prefix)/etc/bash_completion\n" >> $HOME/.bash_profile
-  source $HOME/.bash_profile
-  source <(kops completion bash)
-  kops completion bash > ~/.kops/completion.bash.inc
-  chmod +x $HOME/.kops/completion.bash.inc
-  
-  # kops shell completion
-  printf "$HOME/.kops/completion.bash.inc\n" >> $HOME/.bash_profile
-  source $HOME/.bash_profile
-  
-  # Load the kops completion code for zsh[1] into the current shell
-  source <(kops completion zsh)
-```
 
 ### Options
 
 ```
-  -h, --help           help for completion
-      --shell string   target shell (bash).
+  -h, --help   help for completion
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -58,6 +30,7 @@ kops completion [flags]
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -68,5 +41,9 @@ kops completion [flags]
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
+* [kops completion bash](kops_completion_bash.md)	 - generate the autocompletion script for bash
+* [kops completion fish](kops_completion_fish.md)	 - generate the autocompletion script for fish
+* [kops completion powershell](kops_completion_powershell.md)	 - generate the autocompletion script for powershell
+* [kops completion zsh](kops_completion_zsh.md)	 - generate the autocompletion script for zsh
 

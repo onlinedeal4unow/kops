@@ -4,7 +4,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: (devel)
+    controller-gen.kubebuilder.io/version: v0.5.0
   creationTimestamp: null
   name: instancegroups.kops.k8s.io
 spec:
@@ -58,7 +58,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: InstanceGroupSpec is the specification for an instanceGroup
+            description: InstanceGroupSpec is the specification for an InstanceGroup
             properties:
               additionalSecurityGroups:
                 description: AdditionalSecurityGroups attaches additional security
@@ -87,19 +87,31 @@ spec:
                 description: AssociatePublicIP is true if we want instances to have
                   a public IP
                 type: boolean
+              autoscale:
+                description: Autoscale determines if autoscaling will be enabled for
+                  this instance group if cluster autoscaler is enabled
+                type: boolean
               cloudLabels:
                 additionalProperties:
                   type: string
-                description: CloudLabels indicates the labels for instances in this
-                  group, at the AWS level
+                description: CloudLabels defines additional tags or labels on cloud
+                  provider resources
                 type: object
+              compressUserData:
+                description: CompressUserData compresses parts of the user data to
+                  save space
+                type: boolean
+              cpuCredits:
+                description: CPUCredits is the credit option for CPU Usage on burstable
+                  instance types (AWS only)
+                type: string
               detailedInstanceMonitoring:
                 description: DetailedInstanceMonitoring defines if detailed-monitoring
                   is enabled (AWS only)
                 type: boolean
               externalLoadBalancers:
                 description: ExternalLoadBalancers define loadbalancers that should
-                  be attached to the instancegroup
+                  be attached to this instance group
                 items:
                   description: LoadBalancer defines a load balancer
                   properties:
@@ -217,6 +229,27 @@ spec:
               image:
                 description: Image is the instance (ami etc) we should use
                 type: string
+              instanceInterruptionBehavior:
+                description: InstanceInterruptionBehavior defines if a spot instance
+                  should be terminated, hibernated, or stopped after interruption
+                type: string
+              instanceMetadata:
+                description: InstanceMetadata defines the EC2 instance metadata service
+                  options (AWS Only)
+                properties:
+                  httpPutResponseHopLimit:
+                    description: HTTPPutResponseHopLimit is the desired HTTP PUT response
+                      hop limit for instance metadata requests. The larger the number,
+                      the further instance metadata requests can travel. The default
+                      value is 1.
+                    format: int64
+                    type: integer
+                  httpTokens:
+                    description: HTTPTokens is the state of token usage for the instance
+                      metadata requests. If the parameter is not specified in the
+                      request, the default state is "required".
+                    type: string
+                type: object
               instanceProtection:
                 description: InstanceProtection makes new instances in an autoscaling
                   group protected from scale in
@@ -263,6 +296,10 @@ spec:
                     description: BootstrapKubeconfig is the path to a kubeconfig file
                       that will be used to get client certificate for kubelet
                     type: string
+                  cgroupDriver:
+                    description: CgroupDriver allows the explicit setting of the kubelet
+                      cgroup driver. If omitted, defaults to cgroupfs.
+                    type: string
                   cgroupRoot:
                     description: cgroupRoot is the root cgroup to use for pods. This
                       is handled by the container runtime on a best effort basis.
@@ -283,6 +320,16 @@ spec:
                     description: configureCBR0 enables the kubelet to configure cbr0
                       based on Node.Spec.PodCIDR.
                     type: boolean
+                  containerLogMaxFiles:
+                    description: ContainerLogMaxFiles is the maximum number of container
+                      log files that can be present for a container. The number must
+                      be >= 2.
+                    format: int32
+                    type: integer
+                  containerLogMaxSize:
+                    description: ContainerLogMaxSize is the maximum size (e.g. 10Mi)
+                      of container log file before it is rotated.
+                    type: string
                   cpuCFSQuota:
                     description: CPUCFSQuota enables CPU CFS quota enforcement for
                       containers that specify CPU limits
@@ -299,6 +346,10 @@ spec:
                     description: DockerDisableSharedPID uses a shared PID namespace
                       for containers in a pod.
                     type: boolean
+                  enableCadvisorJsonEndpoints:
+                    description: EnableCadvisorJsonEndpoints enables cAdvisor json
+                      `/spec` and `/stats/*` endpoints. Defaults to False.
+                    type: boolean
                   enableCustomMetrics:
                     description: Enable gathering custom metrics.
                     type: boolean
@@ -310,6 +361,17 @@ spec:
                     description: Enforce Allocatable across pods whenever the overall
                       usage across all pods exceeds Allocatable.
                     type: string
+                  eventBurst:
+                    description: EventBurst temporarily allows event records to burst
+                      to this number, while still not exceeding EventQPS. Only used
+                      if EventQPS > 0.
+                    format: int32
+                    type: integer
+                  eventQPS:
+                    description: EventQPS if > 0, limit event creations per second
+                      to this value.  If 0, unlimited.
+                    format: int32
+                    type: integer
                   evictionHard:
                     description: Comma-delimited list of hard eviction expressions.  For
                       example, 'memory.available<300Mi'.
@@ -370,6 +432,10 @@ spec:
                     description: HostnameOverride is the hostname used to identify
                       the kubelet instead of the actual hostname.
                     type: string
+                  housekeepingInterval:
+                    description: HousekeepingInterval allows to specify interval between
+                      container housekeepings.
+                    type: string
                   imageGCHighThresholdPercent:
                     description: ImageGCHighThresholdPercent is the percent of disk
                       usage after which image garbage collection is always run.
@@ -386,6 +452,10 @@ spec:
                       pulls If no pulling progress is made before this deadline, the
                       image pulling will be cancelled. (default 1m0s)
                     type: string
+                  kernelMemcgNotification:
+                    description: Integrate with the kernel memcg notification to determine
+                      if memory eviction thresholds are crossed rather than polling.
+                    type: boolean
                   kubeReserved:
                     additionalProperties:
                       type: string
@@ -403,6 +473,10 @@ spec:
                   kubeletCgroups:
                     description: KubeletCgroups is the absolute name of cgroups to
                       isolate the kubelet in.
+                    type: string
+                  logFormat:
+                    description: 'LogFormat is the logging format of the kubelet.
+                      Supported values: text, json. Default: text'
                     type: string
                   logLevel:
                     description: LogLevel is the logging level of the kubelet
@@ -456,6 +530,17 @@ spec:
                     description: config is the path to the config file or directory
                       of files
                     type: string
+                  podPidsLimit:
+                    description: PodPidsLimit is the maximum number of pids in any
+                      pod.
+                    format: int64
+                    type: integer
+                  protectKernelDefaults:
+                    description: 'Default kubelet behaviour for kernel tuning. If
+                      set, kubelet errors if any of kernel tunables is different than
+                      kubelet defaults. (DEPRECATED: This parameter should be set
+                      via the config file specified by the Kubelet''s --config flag.'
+                    type: boolean
                   readOnlyPort:
                     description: ReadOnlyPort is the port used by the kubelet api
                       for read-only access (default 10255)
@@ -518,6 +603,15 @@ spec:
                       the default value on nodes that // run docker daemon with version  <
                       1.9 or an Aufs storage backend. // Issue #10959 has more details.'
                     type: boolean
+                  shutdownGracePeriod:
+                    description: 'ShutdownGracePeriod specifies the total duration
+                      that the node should delay the shutdown by. Default: 30s'
+                    type: string
+                  shutdownGracePeriodCriticalPods:
+                    description: 'ShutdownGracePeriodCriticalPods specifies the duration
+                      used to terminate critical pods during a node shutdown. Default:
+                      10s'
+                    type: string
                   streamingConnectionIdleTimeout:
                     description: StreamingConnectionIdleTimeout is the maximum time
                       a streaming connection can be idle before the connection is
@@ -576,6 +670,9 @@ spec:
               machineType:
                 description: MachineType is the instance class
                 type: string
+              manager:
+                description: Manager determines what is managing the node lifecycle
+                type: string
               maxPrice:
                 description: MaxPrice indicates this is a spot-pricing group, with
                   the specified value as our max-price bid
@@ -592,6 +689,41 @@ spec:
                 description: MixedInstancesPolicy defined a optional backing of an
                   AWS ASG by a EC2 Fleet (AWS Only)
                 properties:
+                  instanceRequirements:
+                    description: InstanceRequirements is a list of requirements for
+                      any instance type we are willing to run in the EC2 fleet.
+                    properties:
+                      cpu:
+                        properties:
+                          max:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          min:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        type: object
+                      memory:
+                        properties:
+                          max:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          min:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                        type: object
+                    type: object
                   instances:
                     description: Instances is a list of instance types which we are
                       willing to run in the EC2 fleet
@@ -634,15 +766,19 @@ spec:
                 additionalProperties:
                   type: string
                 description: NodeLabels indicates the kubernetes labels for nodes
-                  in this group
+                  in this instance group
                 type: object
               role:
-                description: 'Type determines the role of instances in this group:
-                  masters or nodes'
+                description: 'Type determines the role of instances in this instance
+                  group: masters or nodes'
                 type: string
               rollingUpdate:
                 description: RollingUpdate defines the rolling-update behavior
                 properties:
+                  drainAndTerminate:
+                    description: DrainAndTerminate enables draining and terminating
+                      nodes during rolling updates. Defaults to true.
+                    type: boolean
                   maxSurge:
                     anyOf:
                     - type: integer
@@ -651,12 +787,11 @@ spec:
                       can be created during the update. The value can be an absolute
                       number (for example 5) or a percentage of desired machines (for
                       example 10%). The absolute number is calculated from a percentage
-                      by rounding up. A value of 0 for both this and MaxUnavailable
-                      disables rolling updates. Has no effect on instance groups with
-                      role "Master". Defaults to 1 on AWS, 0 otherwise. Example: when
-                      this is set to 30%, the InstanceGroup can be scaled up immediately
-                      when the rolling update starts, such that the total number of
-                      old and new nodes do not exceed 130% of desired nodes.'
+                      by rounding up. Has no effect on instance groups with role "Master".
+                      Defaults to 1 on AWS, 0 otherwise. Example: when this is set
+                      to 30%, the InstanceGroup can be scaled up immediately when
+                      the rolling update starts, such that the total number of old
+                      and new nodes do not exceed 130% of desired nodes.'
                     x-kubernetes-int-or-string: true
                   maxUnavailable:
                     anyOf:
@@ -666,25 +801,29 @@ spec:
                       can be unavailable during the update. The value can be an absolute
                       number (for example 5) or a percentage of desired nodes (for
                       example 10%). The absolute number is calculated from a percentage
-                      by rounding down. A value of 0 for both this and MaxSurge disables
-                      rolling updates. Defaults to 1 if MaxSurge is 0, otherwise defaults
-                      to 0. Example: when this is set to 30%, the InstanceGroup can
-                      be scaled down to 70% of desired nodes immediately when the
-                      rolling update starts. Once new nodes are ready, more old nodes
-                      can be drained, ensuring that the total number of nodes available
-                      at all times during the update is at least 70% of desired nodes.'
+                      by rounding down. Defaults to 1 if MaxSurge is 0, otherwise
+                      defaults to 0. Example: when this is set to 30%, the InstanceGroup
+                      can be scaled down to 70% of desired nodes immediately when
+                      the rolling update starts. Once new nodes are ready, more old
+                      nodes can be drained, ensuring that the total number of nodes
+                      available at all times during the update is at least 70% of
+                      desired nodes.'
                     x-kubernetes-int-or-string: true
                 type: object
               rootVolumeDeleteOnTermination:
-                description: 'RootVolumeDeleteOnTermination configures root volume
-                  retention policy upon instance termination. The root volume is deleted
-                  by default. Cluster deletion does not remove retained root volumes.
-                  NOTE: This setting applies only to the Launch Configuration and
-                  does not affect Launch Templates.'
+                description: RootVolumeDeleteOnTermination is unused.
                 type: boolean
+              rootVolumeEncryption:
+                description: RootVolumeEncryption enables EBS root volume encryption
+                  for an instance
+                type: boolean
+              rootVolumeEncryptionKey:
+                description: RootVolumeEncryptionKey provides the key identifier for
+                  root volume encryption
+                type: string
               rootVolumeIops:
-                description: If volume type is io1, then we need to specify the number
-                  of Iops.
+                description: RootVolumeIOPS is the provisioned IOPS when the volume
+                  type is io1, io2 or gp3 (AWS only).
                 format: int32
                 type: integer
               rootVolumeOptimization:
@@ -694,6 +833,11 @@ spec:
               rootVolumeSize:
                 description: RootVolumeSize is the size of the EBS root volume to
                   use, in GB
+                format: int32
+                type: integer
+              rootVolumeThroughput:
+                description: RootVolumeThroughput is the volume throughput in MBps
+                  when the volume type is gp3 (AWS only).
                 format: int32
                 type: integer
               rootVolumeType:
@@ -729,13 +873,21 @@ spec:
                 type: array
               taints:
                 description: Taints indicates the kubernetes taints for nodes in this
-                  group
+                  instance group
                 items:
                   type: string
                 type: array
               tenancy:
-                description: Describes the tenancy of the instance group. Can be either
-                  default or dedicated. Currently only applies to AWS.
+                description: Describes the tenancy of this instance group. Can be
+                  either default or dedicated. Currently only applies to AWS.
+                type: string
+              updatePolicy:
+                description: 'UpdatePolicy determines the policy for applying upgrades
+                  automatically. If specified, this value overrides a value specified
+                  in the Cluster''s "spec.updatePolicy" field. Valid values:   ''automatic''
+                  (default): apply updates automatically (apply OS security upgrades,
+                  avoiding rebooting when possible)   ''external'': do not apply updates
+                  automatically; they are applied manually or by an external system'
                 type: string
               volumeMounts:
                 description: VolumeMounts a collection of volume mounts
@@ -773,11 +925,9 @@ spec:
                     attached to the instance group
                   properties:
                     deleteOnTermination:
-                      description: 'DeleteOnTermination configures volume retention
+                      description: DeleteOnTermination configures volume retention
                         policy upon instance termination. The volume is deleted by
                         default. Cluster deletion does not remove retained volumes.
-                        NOTE: This setting applies only to the Launch Configuration
-                        and does not affect Launch Templates.'
                       type: boolean
                     device:
                       description: Device is an optional device name of the block
@@ -787,12 +937,20 @@ spec:
                       description: Encrypted indicates you want to encrypt the volume
                       type: boolean
                     iops:
-                      description: Iops is the provision iops for this iops (think
-                        io1 in aws)
+                      description: IOPS is the provisioned IOPS for the volume when
+                        the volume type is io1, io2 or gp3 (AWS only).
                       format: int64
                       type: integer
+                    key:
+                      description: Key is the encryption key identifier for the volume
+                      type: string
                     size:
                       description: Size is the size of the volume in GB
+                      format: int64
+                      type: integer
+                    throughput:
+                      description: Throughput is the volume throughput in MBps when
+                        the volume type is gp3 (AWS only).
                       format: int64
                       type: integer
                     type:
@@ -801,6 +959,29 @@ spec:
                       type: string
                   type: object
                 type: array
+              warmPool:
+                description: WarmPool configures an ASG warm pool for the instance
+                  group
+                properties:
+                  enableLifecycleHook:
+                    description: EnableLifecycleHook determines if an ASG lifecycle
+                      hook will be added ensuring that nodeup runs to completion.
+                      Note that the metadata API must be protected from arbitrary
+                      Pods when this is enabled.
+                    type: boolean
+                  maxSize:
+                    description: MaxSize is the maximum size of the warm pool. The
+                      desired size of the instance group is subtracted from this number
+                      to determine the desired size of the warm pool (unless the resulting
+                      number is smaller than MinSize). The default is the instance
+                      group's MaxSize.
+                    format: int64
+                    type: integer
+                  minSize:
+                    description: MinSize is the minimum size of the pool
+                    format: int64
+                    type: integer
+                type: object
               zones:
                 description: Zones is the names of the Zones where machines in this
                   instance group should be placed This is needed for regional subnets

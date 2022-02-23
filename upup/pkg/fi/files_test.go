@@ -1,3 +1,6 @@
+//go:build linux || darwin
+// +build linux darwin
+
 /*
 Copyright 2020 The Kubernetes Authors.
 
@@ -18,15 +21,18 @@ package fi
 
 import (
 	"bytes"
-	"io/ioutil"
 	"os"
 	"path"
+	"syscall"
 	"testing"
 )
 
 func TestWriteFile(t *testing.T) {
-	var TempDir, _ = ioutil.TempDir("", "fitest")
-	defer os.Remove(TempDir)
+	// Clear the umask so an unusual umask doesn't break our test (for directory mode)
+	syscall.Umask(0)
+
+	tempDir := t.TempDir()
+
 	tests := []struct {
 		path     string
 		data     []byte
@@ -34,21 +40,21 @@ func TestWriteFile(t *testing.T) {
 		dirMode  os.FileMode
 	}{
 		{
-			path:     path.Join(TempDir, "SubDir", "test1.tmp"),
+			path:     path.Join(tempDir, "SubDir", "test1.tmp"),
 			data:     []byte("test data\nline 1\r\nline 2"),
-			fileMode: 0644,
-			dirMode:  0755,
+			fileMode: 0o644,
+			dirMode:  0o755,
 		},
 	}
 	for _, test := range tests {
-		err := WriteFile(test.path, NewBytesResource(test.data), test.fileMode, test.dirMode)
+		err := WriteFile(test.path, NewBytesResource(test.data), test.fileMode, test.dirMode, "", "")
 		if err != nil {
 			t.Errorf("Error writing file {%s}, error: {%v}", test.path, err)
 			continue
 		}
 
 		// Check file content
-		data, err := ioutil.ReadFile(test.path)
+		data, err := os.ReadFile(test.path)
 		if err != nil {
 			t.Errorf("Error reading file {%s}, error: {%v}", test.path, err)
 			continue

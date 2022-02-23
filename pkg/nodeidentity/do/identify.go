@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -56,8 +56,8 @@ func (t *TokenSource) Token() (*oauth2.Token, error) {
 	return token, nil
 }
 
-// New creates and returns a nodeidentity.Identifier for Nodes running on DO
-func New() (nodeidentity.Identifier, error) {
+// New creates and returns a nodeidentity.LegacyIdentifier for Nodes running on DO
+func New() (nodeidentity.LegacyIdentifier, error) {
 	region, err := getMetadataRegion()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get droplet region: %s", err)
@@ -107,7 +107,7 @@ func getMetadata(url string) (string, error) {
 		return "", fmt.Errorf("droplet metadata returned non-200 status code: %d", resp.StatusCode)
 	}
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read metadata information %s: %v", url, err)
 	}
@@ -116,7 +116,7 @@ func getMetadata(url string) (string, error) {
 }
 
 // IdentifyNode queries DO for the node identity information
-func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*nodeidentity.Info, error) {
+func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*nodeidentity.LegacyInfo, error) {
 	providerID := node.Spec.ProviderID
 
 	if providerID == "" {
@@ -144,14 +144,13 @@ func (i *nodeIdentifier) IdentifyNode(ctx context.Context, node *corev1.Node) (*
 		return nil, err
 	}
 
-	info := &nodeidentity.Info{}
+	info := &nodeidentity.LegacyInfo{}
 	info.InstanceGroup = kopsGroup
 
 	return info, nil
 }
 
 func (i *nodeIdentifier) getInstanceGroup(instanceID int) (string, error) {
-
 	ctx := context.TODO()
 	droplet, _, err := i.doClient.Droplets.Get(ctx, instanceID)
 	if err != nil {

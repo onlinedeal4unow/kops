@@ -28,7 +28,7 @@ import (
 	dns "google.golang.org/api/dns/v1"
 	"google.golang.org/api/option"
 	gcfg "gopkg.in/gcfg.v1"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/google/clouddns/internal"
@@ -41,7 +41,7 @@ const (
 )
 
 func init() {
-	dnsprovider.RegisterDnsProvider(ProviderName, func(config io.Reader) (dnsprovider.Interface, error) {
+	dnsprovider.RegisterDNSProvider(ProviderName, func(config io.Reader) (dnsprovider.Interface, error) {
 		return newCloudDns(config)
 	})
 }

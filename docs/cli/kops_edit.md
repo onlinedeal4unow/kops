@@ -5,26 +5,6 @@
 
 Edit clusters and other resources.
 
-### Synopsis
-
-Edit a resource configuration. This command changes the desired configuration in the registry.
-
-  To set your preferred editor, you can define the EDITOR environment variable.
-  When you have done this, kops will use the editor that you have set.
-  
-  kops edit does not update the cloud resources, to apply the changes use "kops update cluster".
-
-### Examples
-
-```
-  # Edit a cluster configuration.
-  kops edit cluster k8s-cluster.example.com --state=s3://kops-state-1234
-  
-  # Edit a instance group configuration.
-  kops edit ig --name k8s-cluster.example.com \
-  --state=s3://kops-state-1234 nodes
-```
-
 ### Options
 
 ```
@@ -34,7 +14,7 @@ Edit a resource configuration. This command changes the desired configuration in
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -43,6 +23,7 @@ Edit a resource configuration. This command changes the desired configuration in
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -53,7 +34,7 @@ Edit a resource configuration. This command changes the desired configuration in
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
 * [kops edit cluster](kops_edit_cluster.md)	 - Edit cluster.
 * [kops edit instancegroup](kops_edit_instancegroup.md)	 - Edit instancegroup.
 

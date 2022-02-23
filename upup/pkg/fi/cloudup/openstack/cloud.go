@@ -23,18 +23,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blang/semver/v4"
 	"github.com/gophercloud/gophercloud"
 	os "github.com/gophercloud/gophercloud/openstack"
-	cinder "github.com/gophercloud/gophercloud/openstack/blockstorage/v2/volumes"
+	cinder "github.com/gophercloud/gophercloud/openstack/blockstorage/v3/volumes"
 	az "github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/availabilityzones"
-	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/floatingips"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/keypairs"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/servergroups"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/volumeattach"
+	"github.com/gophercloud/gophercloud/openstack/compute/v2/flavors"
 	"github.com/gophercloud/gophercloud/openstack/compute/v2/servers"
 	"github.com/gophercloud/gophercloud/openstack/dns/v2/recordsets"
 	"github.com/gophercloud/gophercloud/openstack/dns/v2/zones"
 	"github.com/gophercloud/gophercloud/openstack/imageservice/v2/images"
+	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/apiversions"
 	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/listeners"
 	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/monitors"
@@ -48,7 +50,7 @@ import (
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/subnets"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/openstack/designate"
 	"k8s.io/kops/pkg/apis/kops"
@@ -63,39 +65,47 @@ const (
 	TagNameRolePrefix        = "k8s.io/role/"
 	TagClusterName           = "KubernetesCluster"
 	TagRoleMaster            = "master"
+	TagKopsInstanceGroup     = "KopsInstanceGroup"
 	TagKopsNetwork           = "KopsNetwork"
+	TagKopsName              = "KopsName"
+	TagKopsRole              = "KopsRole"
 	ResourceTypePort         = "ports"
 	ResourceTypeNetwork      = "networks"
 	ResourceTypeSubnet       = "subnets"
 )
-
-// ErrNotFound is used to inform that the object is not found
-var ErrNotFound = "Resource not found"
 
 // readBackoff is the backoff strategy for openstack read retries.
 var readBackoff = wait.Backoff{
 	Duration: time.Second,
 	Factor:   1.5,
 	Jitter:   0.1,
-	Steps:    4,
+	Steps:    10,
 }
 
 // writeBackoff is the backoff strategy for openstack write retries.
 var writeBackoff = wait.Backoff{
 	Duration: time.Second,
-	Factor:   1.5,
+	Factor:   2,
 	Jitter:   0.1,
 	Steps:    5,
 }
 
+// deleteBackoff is the backoff strategy for openstack delete retries.
+var deleteBackoff = wait.Backoff{
+	Duration: time.Second,
+	Factor:   5,
+	Jitter:   0.1,
+	Steps:    4,
+}
+
 type OpenstackCloud interface {
 	fi.Cloud
-
 	ComputeClient() *gophercloud.ServiceClient
 	BlockStorageClient() *gophercloud.ServiceClient
 	NetworkingClient() *gophercloud.ServiceClient
 	LoadBalancerClient() *gophercloud.ServiceClient
 	DNSClient() *gophercloud.ServiceClient
+	ImageClient() *gophercloud.ServiceClient
 	UseOctavia() bool
 	UseZones([]string)
 
@@ -106,9 +116,9 @@ type OpenstackCloud interface {
 	ListInstances(servers.ListOptsBuilder) ([]servers.Server, error)
 
 	// CreateInstance will create an openstack server provided create opts
-	CreateInstance(servers.CreateOptsBuilder) (*servers.Server, error)
+	CreateInstance(servers.CreateOptsBuilder, string) (*servers.Server, error)
 
-	//DeleteInstanceWithID will delete instance
+	// DeleteInstanceWithID will delete instance
 	DeleteInstanceWithID(instanceID string) error
 
 	// SetVolumeTags will set the tags for the Cinder volume
@@ -122,43 +132,42 @@ type OpenstackCloud interface {
 
 	// CreateVolume will create a new Cinder Volume
 	CreateVolume(opt cinder.CreateOptsBuilder) (*cinder.Volume, error)
-
 	AttachVolume(serverID string, opt volumeattach.CreateOpts) (*volumeattach.VolumeAttachment, error)
 
-	//DeleteVolume will delete volume
+	// DeleteVolume will delete volume
 	DeleteVolume(volumeID string) error
 
-	//ListSecurityGroups will return the Neutron security groups which match the options
+	// ListSecurityGroups will return the Neutron security groups which match the options
 	ListSecurityGroups(opt sg.ListOpts) ([]sg.SecGroup, error)
 
-	//CreateSecurityGroup will create a new Neutron security group
+	// CreateSecurityGroup will create a new Neutron security group
 	CreateSecurityGroup(opt sg.CreateOptsBuilder) (*sg.SecGroup, error)
 
-	//DeleteSecurityGroup will delete securitygroup
+	// DeleteSecurityGroup will delete securitygroup
 	DeleteSecurityGroup(sgID string) error
 
-	//DeleteSecurityGroupRule will delete securitygrouprule
+	// DeleteSecurityGroupRule will delete securitygrouprule
 	DeleteSecurityGroupRule(ruleID string) error
 
-	//ListSecurityGroupRules will return the Neutron security group rules which match the options
+	// ListSecurityGroupRules will return the Neutron security group rules which match the options
 	ListSecurityGroupRules(opt sgr.ListOpts) ([]sgr.SecGroupRule, error)
 
-	//CreateSecurityGroupRule will create a new Neutron security group rule
+	// CreateSecurityGroupRule will create a new Neutron security group rule
 	CreateSecurityGroupRule(opt sgr.CreateOptsBuilder) (*sgr.SecGroupRule, error)
 
-	//GetNetwork will return the Neutron network which match the id
+	// GetNetwork will return the Neutron network which match the id
 	GetNetwork(networkID string) (*networks.Network, error)
 
-	//FindNetworkBySubnetID will return network
+	// FindNetworkBySubnetID will return network
 	FindNetworkBySubnetID(subnetID string) (*networks.Network, error)
 
-	//GetSubnet returns subnet using subnet id
+	// GetSubnet returns subnet using subnet id
 	GetSubnet(subnetID string) (*subnets.Subnet, error)
 
-	//ListNetworks will return the Neutron networks which match the options
+	// ListNetworks will return the Neutron networks which match the options
 	ListNetworks(opt networks.ListOptsBuilder) ([]networks.Network, error)
 
-	//ListExternalNetworks will return the Neutron networks with the router:external property
+	// ListExternalNetworks will return the Neutron networks with the router:external property
 	GetExternalNetwork() (*networks.Network, error)
 
 	// GetExternalSubnet will return the subnet for floatingip which is used in external router
@@ -167,34 +176,34 @@ type OpenstackCloud interface {
 	// GetLBFloatingSubnet will return the subnet for floatingip which is used in lb
 	GetLBFloatingSubnet() (*subnets.Subnet, error)
 
-	//CreateNetwork will create a new Neutron network
+	// CreateNetwork will create a new Neutron network
 	CreateNetwork(opt networks.CreateOptsBuilder) (*networks.Network, error)
 
-	//DeleteNetwork will delete neutron network
+	// DeleteNetwork will delete neutron network
 	DeleteNetwork(networkID string) error
 
-	//AppendTag appends tag to resource
+	// AppendTag appends tag to resource
 	AppendTag(resource string, id string, tag string) error
 
-	//DeleteTag removes tag from resource
+	// DeleteTag removes tag from resource
 	DeleteTag(resource string, id string, tag string) error
 
-	//ListRouters will return the Neutron routers which match the options
+	// ListRouters will return the Neutron routers which match the options
 	ListRouters(opt routers.ListOpts) ([]routers.Router, error)
 
-	//CreateRouter will create a new Neutron router
+	// CreateRouter will create a new Neutron router
 	CreateRouter(opt routers.CreateOptsBuilder) (*routers.Router, error)
 
-	//DeleteRouter will delete neutron router
+	// DeleteRouter will delete neutron router
 	DeleteRouter(routerID string) error
 
-	//DeleteSubnet will delete neutron subnet
+	// DeleteSubnet will delete neutron subnet
 	DeleteSubnet(subnetID string) error
 
-	//ListSubnets will return the Neutron subnets which match the options
+	// ListSubnets will return the Neutron subnets which match the options
 	ListSubnets(opt subnets.ListOptsBuilder) ([]subnets.Subnet, error)
 
-	//CreateSubnet will create a new Neutron subnet
+	// CreateSubnet will create a new Neutron subnet
 	CreateSubnet(opt subnets.CreateOptsBuilder) (*subnets.Subnet, error)
 
 	// GetKeypair will return the Nova keypair
@@ -208,29 +217,31 @@ type OpenstackCloud interface {
 
 	// CreateKeypair will create a new Nova Keypair
 	CreateKeypair(opt keypairs.CreateOptsBuilder) (*keypairs.KeyPair, error)
-
 	CreatePort(opt ports.CreateOptsBuilder) (*ports.Port, error)
 
-	//GetPort will return a Neutron port by ID
+	// GetPort will return a Neutron port by ID
 	GetPort(id string) (*ports.Port, error)
 
-	//ListPorts will return the Neutron ports which match the options
+	// UpdatePort will update a Neutron port by ID and options
+	UpdatePort(id string, opt ports.UpdateOptsBuilder) (*ports.Port, error)
+
+	// ListPorts will return the Neutron ports which match the options
 	ListPorts(opt ports.ListOptsBuilder) ([]ports.Port, error)
 
 	// DeletePort will delete a neutron port
 	DeletePort(portID string) error
 
-	//CreateRouterInterface will create a new Neutron router interface
+	// CreateRouterInterface will create a new Neutron router interface
 	CreateRouterInterface(routerID string, opt routers.AddInterfaceOptsBuilder) (*routers.InterfaceInfo, error)
 
-	//DeleteRouterInterface will delete router interface from subnet
+	// DeleteRouterInterface will delete router interface from subnet
 	DeleteRouterInterface(routerID string, opt routers.RemoveInterfaceOptsBuilder) error
 
 	// CreateServerGroup will create a new server group.
 	CreateServerGroup(opt servergroups.CreateOptsBuilder) (*servergroups.ServerGroup, error)
 
 	// ListServerGroups will list available server groups
-	ListServerGroups() ([]servergroups.ServerGroup, error)
+	ListServerGroups(opts servergroups.ListOptsBuilder) ([]servergroups.ServerGroup, error)
 
 	// DeleteServerGroup will delete a nova server group
 	DeleteServerGroup(groupID string) error
@@ -240,32 +251,25 @@ type OpenstackCloud interface {
 
 	// ListDNSRecordsets will list the DNS recordsets for the given zone id
 	ListDNSRecordsets(zoneID string, opt recordsets.ListOptsBuilder) ([]recordsets.RecordSet, error)
-
 	GetLB(loadbalancerID string) (*loadbalancers.LoadBalancer, error)
-
+	GetLBStats(loadbalancerID string) (*loadbalancers.Stats, error)
 	CreateLB(opt loadbalancers.CreateOptsBuilder) (*loadbalancers.LoadBalancer, error)
-
 	ListLBs(opt loadbalancers.ListOptsBuilder) ([]loadbalancers.LoadBalancer, error)
+	UpdateMemberInPool(poolID string, memberID string, opts v2pools.UpdateMemberOptsBuilder) (*v2pools.Member, error)
+	ListPoolMembers(poolID string, opts v2pools.ListMembersOpts) ([]v2pools.Member, error)
 
 	// DeleteLB will delete loadbalancer
 	DeleteLB(lbID string, opt loadbalancers.DeleteOpts) error
-
-	GetApiIngressStatus(cluster *kops.Cluster) ([]kops.ApiIngressStatus, error)
-
-	FindClusterStatus(cluster *kops.Cluster) (*kops.ClusterStatus, error)
 
 	// DefaultInstanceType determines a suitable instance type for the specified instance group
 	DefaultInstanceType(cluster *kops.Cluster, ig *kops.InstanceGroup) (string, error)
 
 	// Returns the availability zones for the service client passed (compute, volume, network)
 	ListAvailabilityZones(serviceClient *gophercloud.ServiceClient) ([]az.AvailabilityZone, error)
-
 	AssociateToPool(server *servers.Server, poolID string, opts v2pools.CreateMemberOpts) (*v2pools.Member, error)
-
 	CreatePool(opts v2pools.CreateOpts) (*v2pools.Pool, error)
-
+	CreatePoolMonitor(opts monitors.CreateOpts) (*monitors.Monitor, error)
 	GetPool(poolID string, memberID string) (*v2pools.Member, error)
-
 	ListPools(v2pools.ListOpts) ([]v2pools.Pool, error)
 
 	// ListMonitors will list HealthMonitors matching the provided options
@@ -276,30 +280,21 @@ type OpenstackCloud interface {
 
 	// DeletePool will delete loadbalancer pool
 	DeletePool(poolID string) error
-
 	ListListeners(opts listeners.ListOpts) ([]listeners.Listener, error)
-
 	CreateListener(opts listeners.CreateOpts) (*listeners.Listener, error)
 
 	// DeleteListener will delete loadbalancer listener
 	DeleteListener(listenerID string) error
-
 	GetStorageAZFromCompute(azName string) (*az.AvailabilityZone, error)
-
-	GetFloatingIP(id string) (fip *floatingips.FloatingIP, err error)
-
+	GetL3FloatingIP(id string) (fip *l3floatingip.FloatingIP, err error)
 	GetImage(name string) (i *images.Image, err error)
-
-	AssociateFloatingIPToInstance(serverID string, opts floatingips.AssociateOpts) (err error)
-
+	GetFlavor(name string) (f *flavors.Flavor, err error)
 	ListServerFloatingIPs(id string) ([]*string, error)
-
-	ListFloatingIPs() (fips []floatingips.FloatingIP, err error)
 	ListL3FloatingIPs(opts l3floatingip.ListOpts) (fips []l3floatingip.FloatingIP, err error)
-	CreateFloatingIP(opts floatingips.CreateOpts) (*floatingips.FloatingIP, error)
 	CreateL3FloatingIP(opts l3floatingip.CreateOpts) (fip *l3floatingip.FloatingIP, err error)
 	DeleteFloatingIP(id string) error
 	DeleteL3FloatingIP(id string) error
+	UseLoadBalancerVIPACL() (bool, error)
 }
 
 type openstackCloud struct {
@@ -317,12 +312,25 @@ type openstackCloud struct {
 	useOctavia      bool
 	zones           []string
 	floatingEnabled bool
+	useVIPACL       *bool
 }
 
 var _ fi.Cloud = &openstackCloud{}
 
-func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (OpenstackCloud, error) {
+var openstackCloudInstances map[string]OpenstackCloud = make(map[string]OpenstackCloud)
+
+func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec, uagent string) (OpenstackCloud, error) {
 	config := vfs.OpenstackConfig{}
+
+	region, err := config.GetRegion()
+	if err != nil {
+		return nil, fmt.Errorf("error finding openstack region: %v", err)
+	}
+
+	raw := openstackCloudInstances[region]
+	if raw != nil {
+		return raw, nil
+	}
 
 	authOption, err := config.GetCredential()
 	if err != nil {
@@ -333,11 +341,10 @@ func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (Openstac
 	if err != nil {
 		return nil, fmt.Errorf("error building openstack provider client: %v", err)
 	}
-
-	region, err := config.GetRegion()
-	if err != nil {
-		return nil, fmt.Errorf("error finding openstack region: %v", err)
-	}
+	ua := gophercloud.UserAgent{}
+	ua.Prepend(fmt.Sprintf("kops/%s", uagent))
+	provider.UserAgent = ua
+	klog.V(4).Infof("Using user-agent %s", ua.Join())
 
 	if spec != nil && spec.CloudConfig != nil && spec.CloudConfig.Openstack != nil && spec.CloudConfig.Openstack.InsecureSkipVerify != nil {
 		tlsconfig := &tls.Config{}
@@ -355,9 +362,8 @@ func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (Openstac
 		return nil, fmt.Errorf("error building openstack authenticated client: %v", err)
 	}
 
-	//TODO: maybe try v2, and v3?
-	cinderClient, err := os.NewBlockStorageV2(provider, gophercloud.EndpointOpts{
-		Type:   "volumev2",
+	cinderClient, err := os.NewBlockStorageV3(provider, gophercloud.EndpointOpts{
+		Type:   "volumev3",
 		Region: region,
 	})
 	if err != nil {
@@ -379,6 +385,8 @@ func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (Openstac
 	if err != nil {
 		return nil, fmt.Errorf("error building nova client: %v", err)
 	}
+	// 2.47 is the minimum version where the compute API /server/details returns flavor names
+	novaClient.Microversion = "2.47"
 
 	glanceClient, err := os.NewImageServiceV2(provider, gophercloud.EndpointOpts{
 		Type:   "image",
@@ -390,7 +398,7 @@ func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (Openstac
 
 	var dnsClient *gophercloud.ServiceClient
 	if !dns.IsGossipHostname(tags[TagClusterName]) {
-		//TODO: This should be replaced with the environment variable methods as done above
+		// TODO: This should be replaced with the environment variable methods as done above
 		endpointOpt, err := config.GetServiceConfig("Designate")
 		if err != nil {
 			return nil, err
@@ -472,6 +480,8 @@ func NewOpenstackCloud(tags map[string]string, spec *kops.ClusterSpec) (Openstac
 		}
 	}
 	c.lbClient = lbClient
+	openstackCloudInstances[region] = c
+
 	return c, nil
 }
 
@@ -504,6 +514,10 @@ func (c *openstackCloud) DNSClient() *gophercloud.ServiceClient {
 	return c.dnsClient
 }
 
+func (c *openstackCloud) ImageClient() *gophercloud.ServiceClient {
+	return c.glanceClient
+}
+
 func (c *openstackCloud) Region() string {
 	return c.region
 }
@@ -522,10 +536,14 @@ func (c *openstackCloud) DNS() (dnsprovider.Interface, error) {
 
 // FindVPCInfo list subnets in network
 func (c *openstackCloud) FindVPCInfo(id string) (*fi.VPCInfo, error) {
+	return findVPCInfo(c, id, c.zones)
+}
+
+func findVPCInfo(c OpenstackCloud, id string, zones []string) (*fi.VPCInfo, error) {
 	vpcInfo := &fi.VPCInfo{}
 	// Find subnets in the network
 	{
-		if len(c.zones) == 0 {
+		if len(zones) == 0 {
 			return nil, fmt.Errorf("could not initialize zones")
 		}
 		klog.V(2).Infof("Calling ListSubnets for subnets in Network %q", id)
@@ -538,7 +556,7 @@ func (c *openstackCloud) FindVPCInfo(id string) (*fi.VPCInfo, error) {
 		}
 
 		for index, subnet := range subnets {
-			zone := c.zones[int(index)%len(c.zones)]
+			zone := zones[int(index)%len(zones)]
 			subnetInfo := &fi.SubnetInfo{
 				ID:   subnet.ID,
 				CIDR: subnet.CIDR,
@@ -552,6 +570,10 @@ func (c *openstackCloud) FindVPCInfo(id string) (*fi.VPCInfo, error) {
 
 // DeleteGroup in openstack will delete servergroup, instances and ports
 func (c *openstackCloud) DeleteGroup(g *cloudinstances.CloudInstanceGroup) error {
+	return deleteGroup(c, g)
+}
+
+func deleteGroup(c OpenstackCloud, g *cloudinstances.CloudInstanceGroup) error {
 	grp := g.Raw.(*servergroups.ServerGroup)
 
 	for _, id := range grp.Members {
@@ -584,10 +606,14 @@ func (c *openstackCloud) DeleteGroup(g *cloudinstances.CloudInstanceGroup) error
 }
 
 func (c *openstackCloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
+	return getCloudGroups(c, cluster, instancegroups, warnUnmatched, nodes)
+}
+
+func getCloudGroups(c OpenstackCloud, cluster *kops.Cluster, instancegroups []*kops.InstanceGroup, warnUnmatched bool, nodes []v1.Node) (map[string]*cloudinstances.CloudInstanceGroup, error) {
 	nodeMap := cloudinstances.GetNodeMap(nodes, cluster)
 	groups := make(map[string]*cloudinstances.CloudInstanceGroup)
 
-	serverGrps, err := c.ListServerGroups()
+	serverGrps, err := c.ListServerGroups(servergroups.ListOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("unable to list servergroups: %v", err)
 	}
@@ -604,7 +630,7 @@ func (c *openstackCloud) GetCloudGroups(cluster *kops.Cluster, instancegroups []
 			}
 			continue
 		}
-		groups[instancegroup.ObjectMeta.Name], err = c.osBuildCloudInstanceGroup(cluster, instancegroup, &grp, nodeMap)
+		groups[instancegroup.ObjectMeta.Name], err = osBuildCloudInstanceGroup(c, cluster, instancegroup, &grp, nodeMap)
 		if err != nil {
 			return nil, fmt.Errorf("error getting cloud instance group %q: %v", instancegroup.ObjectMeta.Name, err)
 		}
@@ -616,44 +642,91 @@ func (c *openstackCloud) GetCloudTags() map[string]string {
 	return c.tags
 }
 
+func (c *openstackCloud) UseLoadBalancerVIPACL() (bool, error) {
+	if c.useVIPACL != nil {
+		return *c.useVIPACL, nil
+	}
+	use, err := useLoadBalancerVIPACL(c)
+	if err != nil {
+		return false, err
+	}
+	c.useVIPACL = &use
+	return use, nil
+}
+
+func useLoadBalancerVIPACL(c OpenstackCloud) (bool, error) {
+	allPages, err := apiversions.List(c.LoadBalancerClient()).AllPages()
+	if err != nil {
+		return false, err
+	}
+	versions, err := apiversions.ExtractAPIVersions(allPages)
+	if err != nil {
+		return false, err
+	}
+	if len(versions) == 0 {
+		return false, fmt.Errorf("loadbalancer API versions not found")
+	}
+	ver, err := semver.ParseTolerant(versions[len(versions)-1].ID)
+	if err != nil {
+		return false, err
+	}
+	// https://github.com/kubernetes/cloud-provider-openstack/blob/721615aa256bbddbd481cfb4a887c3ab180c5563/pkg/util/openstack/loadbalancer.go#L108
+	return ver.Compare(semver.MustParse("2.12.0")) > 0, nil
+}
+
 type Address struct {
 	IPType string `mapstructure:"OS-EXT-IPS:type"`
 	Addr   string
 }
 
-func (c *openstackCloud) GetApiIngressStatus(cluster *kops.Cluster) ([]kops.ApiIngressStatus, error) {
-	var ingresses []kops.ApiIngressStatus
+func (c *openstackCloud) GetApiIngressStatus(cluster *kops.Cluster) ([]fi.ApiIngressStatus, error) {
+	return getApiIngressStatus(c, cluster)
+}
+
+func getApiIngressStatus(c OpenstackCloud, cluster *kops.Cluster) ([]fi.ApiIngressStatus, error) {
 	if cluster.Spec.CloudConfig.Openstack.Loadbalancer != nil {
-		if cluster.Spec.MasterPublicName != "" {
-			// Note that this must match OpenstackModel lb name
-			klog.V(2).Infof("Querying Openstack to find Loadbalancers for API (%q)", cluster.Name)
-			lbList, err := c.ListLBs(loadbalancers.ListOpts{
-				Name: cluster.Spec.MasterPublicName,
+		return getLoadBalancerIngressStatus(c, cluster)
+	} else {
+		return getIPIngressStatus(c, cluster)
+	}
+}
+
+func getLoadBalancerIngressStatus(c OpenstackCloud, cluster *kops.Cluster) ([]fi.ApiIngressStatus, error) {
+	var ingresses []fi.ApiIngressStatus
+	if cluster.Spec.MasterPublicName != "" {
+		// Note that this must match OpenstackModel lb name
+		klog.V(2).Infof("Querying Openstack to find Loadbalancers for API (%q)", cluster.Name)
+		lbList, err := c.ListLBs(loadbalancers.ListOpts{
+			Name: cluster.Spec.MasterPublicName,
+		})
+		if err != nil {
+			return ingresses, fmt.Errorf("GetApiIngressStatus: Failed to list openstack loadbalancers: %v", err)
+		}
+		for _, lb := range lbList {
+			// Must Find Floating IP related to this lb
+			fips, err := c.ListL3FloatingIPs(l3floatingip.ListOpts{
+				PortID: lb.VipPortID,
 			})
 			if err != nil {
-				return ingresses, fmt.Errorf("GetApiIngressStatus: Failed to list openstack loadbalancers: %v", err)
+				return ingresses, fmt.Errorf("GetApiIngressStatus: Failed to list floating IP's: %v", err)
 			}
-			for _, lb := range lbList {
-				// Must Find Floating IP related to this lb
-				fips, err := c.ListL3FloatingIPs(l3floatingip.ListOpts{
-					PortID: lb.VipPortID,
-				})
-				if err != nil {
-					return ingresses, fmt.Errorf("GetApiIngressStatus: Failed to list floating IP's: %v", err)
-				}
-				for _, fip := range fips {
-					if fip.PortID == lb.VipPortID {
-						ingresses = append(ingresses, kops.ApiIngressStatus{
-							IP: fip.FloatingIP,
-						})
-					}
+			for _, fip := range fips {
+				if fip.PortID == lb.VipPortID {
+					ingresses = append(ingresses, fi.ApiIngressStatus{
+						IP: fip.FloatingIP,
+					})
 				}
 			}
 		}
-	} else {
+	}
+	return ingresses, nil
+}
+
+func getIPIngressStatus(c OpenstackCloud, cluster *kops.Cluster) (ingresses []fi.ApiIngressStatus, err error) {
+	done, err := vfs.RetryWithBackoff(readBackoff, func() (bool, error) {
 		instances, err := c.ListInstances(servers.ListOpts{})
 		if err != nil {
-			return ingresses, fmt.Errorf("GetApiIngressStatus: Failed to list master nodes: %v", err)
+			return false, fmt.Errorf("GetApiIngressStatus: Failed to list master nodes: %v", err)
 		}
 		for _, instance := range instances {
 			val, ok := instance.Metadata["k8s"]
@@ -661,25 +734,47 @@ func (c *openstackCloud) GetApiIngressStatus(cluster *kops.Cluster) ([]kops.ApiI
 			if ok && val == cluster.Name && ok2 {
 				role, success := kops.ParseInstanceGroupRole(val2, false)
 				if success && role == kops.InstanceGroupRoleMaster {
-					ips, err := c.ListServerFloatingIPs(instance.ID)
-					if err != nil {
-						return ingresses, err
-					}
-					for _, ip := range ips {
-						ingresses = append(ingresses, kops.ApiIngressStatus{
-							IP: fi.StringValue(ip),
+					if cluster.Spec.Topology != nil && cluster.Spec.Topology.Masters == kops.TopologyPrivate {
+						ifName := instance.Metadata[TagKopsNetwork]
+						address, err := GetServerFixedIP(&instance, ifName)
+						if err != nil {
+							return false, fmt.Errorf("failed to get interface address: %v", err)
+						}
+						ingresses = append(ingresses, fi.ApiIngressStatus{
+							IP: address,
 						})
+					} else {
+						ips, err := c.ListServerFloatingIPs(instance.ID)
+						if err != nil {
+							return false, err
+						}
+						for _, ip := range ips {
+							ingresses = append(ingresses, fi.ApiIngressStatus{
+								IP: fi.StringValue(ip),
+							})
+						}
 					}
 				}
 			}
 		}
+		return true, nil
+	})
+	if done {
+		return ingresses, nil
+	} else {
+		if err == nil {
+			err = wait.ErrWaitTimeout
+		}
+		return ingresses, err
 	}
-
-	return ingresses, nil
 }
 
 func isNotFound(err error) bool {
 	if _, ok := err.(gophercloud.ErrDefault404); ok {
+		return true
+	}
+
+	if _, ok := err.(gophercloud.ErrResourceNotFound); ok {
 		return true
 	}
 

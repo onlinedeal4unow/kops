@@ -18,10 +18,14 @@ package instancegroups
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,22 +33,24 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/json"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
+	"k8s.io/kubectl/pkg/drain"
+
 	api "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/cloudinstances"
-	"k8s.io/kubectl/pkg/drain"
+	"k8s.io/kops/pkg/validation"
 )
 
 const rollingUpdateTaintKey = "kops.k8s.io/scheduled-for-update"
 
 // promptInteractive asks the user to continue, mostly copied from vendor/google.golang.org/api/examples/gmail.go.
-func promptInteractive(upgradedHostId, upgradedHostName string) (stopPrompting bool, err error) {
+func promptInteractive(upgradedHostID, upgradedHostName string) (stopPrompting bool, err error) {
 	stopPrompting = false
 	scanner := bufio.NewScanner(os.Stdin)
 	if upgradedHostName != "" {
-		klog.Infof("Pausing after finished %q, node %q", upgradedHostId, upgradedHostName)
+		klog.Infof("Pausing after finished %q, node %q", upgradedHostID, upgradedHostName)
 	} else {
-		klog.Infof("Pausing after finished %q", upgradedHostId)
+		klog.Infof("Pausing after finished %q", upgradedHostID)
 	}
 	fmt.Print("Continue? (Y)es, (N)o, (A)lwaysYes: [Y] ")
 	scanner.Scan()
@@ -68,7 +74,8 @@ func promptInteractive(upgradedHostId, upgradedHostName string) (stopPrompting b
 }
 
 // RollingUpdate performs a rolling update on a list of instances.
-func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, group *cloudinstances.CloudInstanceGroup, isBastion bool, sleepAfterTerminate time.Duration, validationTimeout time.Duration) (err error) {
+func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(group *cloudinstances.CloudInstanceGroup, sleepAfterTerminate time.Duration) (err error) {
+	isBastion := group.InstanceGroup.IsBastion()
 	// Do not need a k8s client if you are doing cloudonly.
 	if c.K8sClient == nil && !c.CloudOnly {
 		return fmt.Errorf("rollingUpdate is missing a k8s client")
@@ -87,16 +94,8 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 
 	if isBastion {
 		klog.V(3).Info("Not validating the cluster as instance is a bastion.")
-	} else if c.CloudOnly {
-		klog.V(3).Info("Not validating cluster as validation is turned off via the cloud-only flag.")
-	} else {
-		if err = c.validateCluster(); err != nil {
-			if c.FailOnValidate {
-				return err
-			}
-			klog.V(2).Infof("Ignoring cluster validation error: %v", err)
-			klog.Info("Cluster validation failed, but proceeding since fail-on-validate-error is set to false")
-		}
+	} else if err = c.maybeValidate("", 1, group); err != nil {
+		return err
 	}
 
 	if !c.CloudOnly {
@@ -106,7 +105,7 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 		}
 	}
 
-	settings := resolveSettings(cluster, group.InstanceGroup, numInstances)
+	settings := resolveSettings(c.Cluster, group.InstanceGroup, numInstances)
 
 	runningDrains := 0
 	maxSurge := settings.MaxSurge.IntValue()
@@ -114,11 +113,6 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 		maxSurge = len(update)
 	}
 	maxConcurrency := maxSurge + settings.MaxUnavailable.IntValue()
-
-	if maxConcurrency == 0 {
-		klog.Infof("Rolling updates for InstanceGroup %s are disabled", group.InstanceGroup.Name)
-		return nil
-	}
 
 	if group.InstanceGroup.Spec.Role == api.InstanceGroupRoleMaster && maxSurge != 0 {
 		// Masters are incapable of surging because they rely on registering themselves through
@@ -131,6 +125,21 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 		}
 	}
 
+	nonWarmPool := []*cloudinstances.CloudInstance{}
+	// Run through the warm pool and delete all instances directly
+	for _, instance := range update {
+		if instance.State == cloudinstances.WarmPool {
+			klog.Infof("deleting warm pool instance %q", instance.ID)
+			err := c.Cloud.DeleteInstance(instance)
+			if err != nil {
+				return fmt.Errorf("failed to delete warm pool instance %q: %w", instance.ID, err)
+			}
+		} else {
+			nonWarmPool = append(nonWarmPool, instance)
+		}
+	}
+	update = nonWarmPool
+
 	if c.Interactive {
 		if maxSurge > 1 {
 			maxSurge = 1
@@ -141,11 +150,18 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 	update = prioritizeUpdate(update)
 
 	if maxSurge > 0 && !c.CloudOnly {
+		skippedNodes := 0
 		for numSurge := 1; numSurge <= maxSurge; numSurge++ {
-			u := update[len(update)-numSurge]
-			if !u.Detached {
+			u := update[len(update)-numSurge-skippedNodes]
+			if u.Status != cloudinstances.CloudInstanceStatusDetached {
 				if err := c.detachInstance(u); err != nil {
-					return err
+					// If detaching a node fails, we simply proceed to the next one instead of
+					// bubbling up the error.
+					skippedNodes++
+					numSurge--
+					if maxSurge > len(update)-skippedNodes {
+						maxSurge = len(update) - skippedNodes
+					}
 				}
 
 				// If noneReady, wait until after one node is detached and its replacement validates
@@ -155,7 +171,7 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 					klog.Infof("waiting for %v after detaching instance", sleepAfterTerminate)
 					time.Sleep(sleepAfterTerminate)
 
-					if err := c.maybeValidate(validationTimeout, "detaching"); err != nil {
+					if err := c.maybeValidate(" after detaching instance", c.ValidateCount, group); err != nil {
 						return err
 					}
 					noneReady = false
@@ -164,11 +180,16 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 		}
 	}
 
+	if !*settings.DrainAndTerminate {
+		klog.Infof("Rolling updates for InstanceGroup %s are disabled", group.InstanceGroup.Name)
+		return nil
+	}
+
 	terminateChan := make(chan error, maxConcurrency)
 
 	for uIdx, u := range update {
-		go func(m *cloudinstances.CloudInstanceGroupMember) {
-			terminateChan <- c.drainTerminateAndWait(m, isBastion, sleepAfterTerminate)
+		go func(m *cloudinstances.CloudInstance) {
+			terminateChan <- c.drainTerminateAndWait(m, sleepAfterTerminate)
 		}(u)
 		runningDrains++
 
@@ -184,7 +205,7 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 			return waitForPendingBeforeReturningError(runningDrains, terminateChan, err)
 		}
 
-		err = c.maybeValidate(validationTimeout, "removing")
+		err = c.maybeValidate(" after terminating instance", c.ValidateCount, group)
 		if err != nil {
 			return waitForPendingBeforeReturningError(runningDrains, terminateChan, err)
 		}
@@ -230,7 +251,7 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 			}
 		}
 
-		err = c.maybeValidate(validationTimeout, "removing")
+		err = c.maybeValidate(" after terminating instance", c.ValidateCount, group)
 		if err != nil {
 			return err
 		}
@@ -239,15 +260,15 @@ func (c *RollingUpdateCluster) rollingUpdateInstanceGroup(cluster *api.Cluster, 
 	return nil
 }
 
-func prioritizeUpdate(update []*cloudinstances.CloudInstanceGroupMember) []*cloudinstances.CloudInstanceGroupMember {
+func prioritizeUpdate(update []*cloudinstances.CloudInstance) []*cloudinstances.CloudInstance {
 	// The priorities are, in order:
 	//   attached before detached
 	//   TODO unhealthy before healthy
 	//   NeedUpdate before Ready (preserve original order)
-	result := make([]*cloudinstances.CloudInstanceGroupMember, 0, len(update))
-	var detached []*cloudinstances.CloudInstanceGroupMember
+	result := make([]*cloudinstances.CloudInstance, 0, len(update))
+	var detached []*cloudinstances.CloudInstance
 	for _, u := range update {
-		if u.Detached {
+		if u.Status == cloudinstances.CloudInstanceStatusDetached {
 			detached = append(detached, u)
 		} else {
 			result = append(result, u)
@@ -266,7 +287,7 @@ func waitForPendingBeforeReturningError(runningDrains int, terminateChan chan er
 	return err
 }
 
-func (c *RollingUpdateCluster) taintAllNeedUpdate(group *cloudinstances.CloudInstanceGroup, update []*cloudinstances.CloudInstanceGroupMember) error {
+func (c *RollingUpdateCluster) taintAllNeedUpdate(group *cloudinstances.CloudInstanceGroup, update []*cloudinstances.CloudInstance) error {
 	var toTaint []*corev1.Node
 	for _, u := range update {
 		if u.Node != nil && !u.Node.Spec.Unschedulable {
@@ -320,26 +341,60 @@ func (c *RollingUpdateCluster) patchTaint(node *corev1.Node) error {
 		return err
 	}
 
-	_, err = c.K8sClient.CoreV1().Nodes().Patch(node.Name, types.StrategicMergePatchType, patchBytes)
+	_, err = c.K8sClient.CoreV1().Nodes().Patch(c.Ctx, node.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	return err
 }
 
-func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInstanceGroupMember, isBastion bool, sleepAfterTerminate time.Duration) error {
-	instanceId := u.ID
+func (c *RollingUpdateCluster) patchExcludeFromLB(node *corev1.Node) error {
+	oldData, err := json.Marshal(node)
+	if err != nil {
+		return err
+	}
+
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+
+	if _, ok := node.Labels[corev1.LabelNodeExcludeBalancers]; ok {
+		return nil
+	}
+	node.Labels[corev1.LabelNodeExcludeBalancers] = ""
+
+	newData, err := json.Marshal(node)
+	if err != nil {
+		return err
+	}
+
+	patchBytes, err := strategicpatch.CreateTwoWayMergePatch(oldData, newData, node)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.K8sClient.CoreV1().Nodes().Patch(c.Ctx, node.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInstance, sleepAfterTerminate time.Duration) error {
+	instanceID := u.ID
 
 	nodeName := ""
 	if u.Node != nil {
 		nodeName = u.Node.Name
 	}
 
+	isBastion := u.CloudInstanceGroup.InstanceGroup.IsBastion()
+
 	if isBastion {
 		// We don't want to validate for bastions - they aren't part of the cluster
 	} else if c.CloudOnly {
-
 		klog.Warning("Not draining cluster nodes as 'cloudonly' flag is set.")
-
 	} else {
-
 		if u.Node != nil {
 			klog.Infof("Draining the node: %q.", nodeName)
 
@@ -350,7 +405,7 @@ func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInst
 				klog.Infof("Ignoring error draining node %q: %v", nodeName, err)
 			}
 		} else {
-			klog.Warningf("Skipping drain of instance %q, because it is not registered in kubernetes", instanceId)
+			klog.Warningf("Skipping drain of instance %q, because it is not registered in kubernetes", instanceID)
 		}
 	}
 
@@ -358,7 +413,7 @@ func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInst
 	// (It often seems like GCE tries to re-use names)
 	if !isBastion && !c.CloudOnly {
 		if u.Node == nil {
-			klog.Warningf("no kubernetes Node associated with %s, skipping node deletion", instanceId)
+			klog.Warningf("no kubernetes Node associated with %s, skipping node deletion", instanceID)
 		} else {
 			klog.Infof("deleting node %q from kubernetes", nodeName)
 			if err := c.deleteNode(u.Node); err != nil {
@@ -368,7 +423,12 @@ func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInst
 	}
 
 	if err := c.deleteInstance(u); err != nil {
-		klog.Errorf("error deleting instance %q, node %q: %v", instanceId, nodeName, err)
+		klog.Errorf("error deleting instance %q, node %q: %v", instanceID, nodeName, err)
+		return err
+	}
+
+	if err := c.reconcileInstanceGroup(); err != nil {
+		klog.Errorf("error reconciling instance group %q: %v", u.CloudInstanceGroup.HumanName, err)
 		return err
 	}
 
@@ -379,100 +439,125 @@ func (c *RollingUpdateCluster) drainTerminateAndWait(u *cloudinstances.CloudInst
 	return nil
 }
 
-func (c *RollingUpdateCluster) maybeValidate(validationTimeout time.Duration, operation string) error {
+func (c *RollingUpdateCluster) reconcileInstanceGroup() error {
+	if api.CloudProviderID(c.Cluster.Spec.CloudProvider) != api.CloudProviderOpenstack &&
+		api.CloudProviderID(c.Cluster.Spec.CloudProvider) != api.CloudProviderDO {
+		return nil
+	}
+	rto := fi.RunTasksOptions{}
+	rto.InitDefaults()
+	applyCmd := &cloudup.ApplyClusterCmd{
+		Cloud:              c.Cloud,
+		Clientset:          c.Clientset,
+		Cluster:            c.Cluster,
+		DryRun:             false,
+		AllowKopsDowngrade: true,
+		RunTasksOptions:    &rto,
+		OutDir:             "",
+		Phase:              "",
+		TargetName:         "direct",
+		LifecycleOverrides: map[string]fi.Lifecycle{},
+	}
+
+	return applyCmd.Run(c.Ctx)
+}
+
+func (c *RollingUpdateCluster) maybeValidate(operation string, validateCount int, group *cloudinstances.CloudInstanceGroup) error {
 	if c.CloudOnly {
 		klog.Warningf("Not validating cluster as cloudonly flag is set.")
-
 	} else {
 		klog.Info("Validating the cluster.")
 
-		if err := c.validateClusterWithDuration(validationTimeout); err != nil {
+		if err := c.validateClusterWithTimeout(validateCount, group); err != nil {
 
 			if c.FailOnValidate {
-				klog.Errorf("Cluster did not validate within %s", validationTimeout)
-				return fmt.Errorf("error validating cluster after %s a node: %v", operation, err)
+				klog.Errorf("Cluster did not validate within %s", c.ValidationTimeout)
+				return fmt.Errorf("error validating cluster%s: %v", operation, err)
 			}
 
-			klog.Warningf("Cluster validation failed after %s instance, proceeding since fail-on-validate is set to false: %v", operation, err)
+			klog.Warningf("Cluster validation failed%s, proceeding since fail-on-validate is set to false: %v", operation, err)
 		}
 	}
 	return nil
 }
 
-// validateClusterWithDuration runs validation.ValidateCluster until either we get positive result or the timeout expires
-func (c *RollingUpdateCluster) validateClusterWithDuration(duration time.Duration) error {
-	// Try to validate cluster at least once, this will handle durations that are lower
-	// than our tick time
-	if c.tryValidateCluster(duration) {
+// validateClusterWithTimeout runs validation.ValidateCluster until either we get positive result or the timeout expires
+func (c *RollingUpdateCluster) validateClusterWithTimeout(validateCount int, group *cloudinstances.CloudInstanceGroup) error {
+	ctx, cancel := context.WithTimeout(context.Background(), c.ValidationTimeout)
+	defer cancel()
+
+	if validateCount == 0 {
+		klog.Warningf("skipping cluster validation because validate-count was 0")
 		return nil
 	}
 
-	timeout := time.After(duration)
-	ticker := time.NewTicker(c.ValidateTickDuration)
-	defer ticker.Stop()
-	// Keep trying until we're timed out or got a result or got an error
+	successCount := 0
+
 	for {
-		select {
-		case <-timeout:
-			// Got a timeout fail with a timeout error
-			return fmt.Errorf("cluster did not validate within a duration of %q", duration)
-		case <-ticker.C:
-			// Got a tick, validate cluster
-			if c.tryValidateCluster(duration) {
+		// Note that we validate at least once before checking the timeout, in case the cluster is healthy with a short timeout
+		result, err := c.ClusterValidator.Validate()
+		if err == nil && !hasFailureRelevantToGroup(result.Failures, group) {
+			successCount++
+			if successCount >= validateCount {
+				klog.Info("Cluster validated.")
 				return nil
 			}
-			// ValidateCluster didn't work yet, so let's try again
-			// this will exit up to the for loop
+			klog.Infof("Cluster validated; revalidating in %s to make sure it does not flap.", c.ValidateSuccessDuration)
+			time.Sleep(c.ValidateSuccessDuration)
+			continue
 		}
+
+		if err != nil {
+			if ctx.Err() != nil {
+				klog.Infof("Cluster did not validate within deadline: %v.", err)
+				break
+			}
+			klog.Infof("Cluster did not validate, will retry in %q: %v.", c.ValidateTickDuration, err)
+		} else if len(result.Failures) > 0 {
+			messages := []string{}
+			for _, failure := range result.Failures {
+				messages = append(messages, failure.Message)
+			}
+			if ctx.Err() != nil {
+				klog.Infof("Cluster did not pass validation within deadline: %s.", strings.Join(messages, ", "))
+				break
+			}
+			klog.Infof("Cluster did not pass validation, will retry in %q: %s.", c.ValidateTickDuration, strings.Join(messages, ", "))
+		}
+
+		// Reset the success count; we want N consecutive successful validations
+		successCount = 0
+
+		// Wait before retrying in some cases
+		// TODO: Should we check if we have enough time left before the deadline?
+		time.Sleep(c.ValidateTickDuration)
 	}
+
+	return fmt.Errorf("cluster did not validate within a duration of %q", c.ValidationTimeout)
 }
 
-func (c *RollingUpdateCluster) tryValidateCluster(duration time.Duration) bool {
-	result, err := c.ClusterValidator.Validate()
+// checks if the validation failures returned after cluster validation are relevant to the current
+// instance group whose rolling update is occurring
+func hasFailureRelevantToGroup(failures []*validation.ValidationError, group *cloudinstances.CloudInstanceGroup) bool {
+	// Ignore non critical validation errors in other instance groups like below target size errors
+	for _, failure := range failures {
+		// Certain failures like a system-critical-pod failure and dns server related failures
+		// set their InstanceGroup to nil, since we cannot associate the failure to any one group
+		if failure.InstanceGroup == nil {
+			return true
+		}
 
-	if err == nil && len(result.Failures) == 0 && c.ValidateCount > 0 {
-		c.ValidateSucceeded++
-		if c.ValidateSucceeded < c.ValidateCount {
-			klog.Infof("Cluster validated; revalidating %d time(s) to make sure it does not flap.", c.ValidateCount-c.ValidateSucceeded)
-			return false
+		// if there is a failure in the same instance group or a failure which has cluster wide impact
+		if (failure.InstanceGroup.IsMaster()) || (failure.InstanceGroup == group.InstanceGroup) {
+			return true
 		}
 	}
 
-	if err != nil {
-		klog.Infof("Cluster did not validate, will try again in %q until duration %q expires: %v.", c.ValidateTickDuration, duration, err)
-		return false
-	} else if len(result.Failures) > 0 {
-		messages := []string{}
-		for _, failure := range result.Failures {
-			messages = append(messages, failure.Message)
-		}
-		klog.Infof("Cluster did not pass validation, will try again in %q until duration %q expires: %s.", c.ValidateTickDuration, duration, strings.Join(messages, ", "))
-		return false
-	} else {
-		klog.Info("Cluster validated.")
-		return true
-	}
-}
-
-// validateCluster runs our validation methods on the K8s Cluster.
-func (c *RollingUpdateCluster) validateCluster() error {
-	result, err := c.ClusterValidator.Validate()
-	if err != nil {
-		return fmt.Errorf("cluster %q did not validate: %v", c.ClusterName, err)
-	}
-	if len(result.Failures) > 0 {
-		messages := []string{}
-		for _, failure := range result.Failures {
-			messages = append(messages, failure.Message)
-		}
-		return fmt.Errorf("cluster %q did not pass validation: %s", c.ClusterName, strings.Join(messages, ", "))
-	}
-
-	return nil
+	return false
 }
 
 // detachInstance detaches a Cloud Instance
-func (c *RollingUpdateCluster) detachInstance(u *cloudinstances.CloudInstanceGroupMember) error {
+func (c *RollingUpdateCluster) detachInstance(u *cloudinstances.CloudInstance) error {
 	id := u.ID
 	nodeName := ""
 	if u.Node != nil {
@@ -487,16 +572,15 @@ func (c *RollingUpdateCluster) detachInstance(u *cloudinstances.CloudInstanceGro
 	if err := c.Cloud.DetachInstance(u); err != nil {
 		if nodeName != "" {
 			return fmt.Errorf("error detaching instance %q, node %q: %v", id, nodeName, err)
-		} else {
-			return fmt.Errorf("error detaching instance %q: %v", id, err)
 		}
+		return fmt.Errorf("error detaching instance %q: %v", id, err)
 	}
 
 	return nil
 }
 
 // deleteInstance deletes an Cloud Instance.
-func (c *RollingUpdateCluster) deleteInstance(u *cloudinstances.CloudInstanceGroupMember) error {
+func (c *RollingUpdateCluster) deleteInstance(u *cloudinstances.CloudInstance) error {
 	id := u.ID
 	nodeName := ""
 	if u.Node != nil {
@@ -511,16 +595,15 @@ func (c *RollingUpdateCluster) deleteInstance(u *cloudinstances.CloudInstanceGro
 	if err := c.Cloud.DeleteInstance(u); err != nil {
 		if nodeName != "" {
 			return fmt.Errorf("error deleting instance %q, node %q: %v", id, nodeName, err)
-		} else {
-			return fmt.Errorf("error deleting instance %q: %v", id, err)
 		}
+		return fmt.Errorf("error deleting instance %q: %v", id, err)
 	}
 
 	return nil
 }
 
 // drainNode drains a K8s node.
-func (c *RollingUpdateCluster) drainNode(u *cloudinstances.CloudInstanceGroupMember) error {
+func (c *RollingUpdateCluster) drainNode(u *cloudinstances.CloudInstance) error {
 	if c.K8sClient == nil {
 		return fmt.Errorf("K8sClient not set")
 	}
@@ -534,25 +617,41 @@ func (c *RollingUpdateCluster) drainNode(u *cloudinstances.CloudInstanceGroupMem
 	}
 
 	helper := &drain.Helper{
+		Ctx:                 c.Ctx,
 		Client:              c.K8sClient,
 		Force:               true,
 		GracePeriodSeconds:  -1,
 		IgnoreAllDaemonSets: true,
 		Out:                 os.Stdout,
 		ErrOut:              os.Stderr,
+		Timeout:             c.DrainTimeout,
 
-		// We want to proceed even when pods are using local data (emptyDir)
-		DeleteLocalData: true,
-
-		// Other options we might want to set:
-		// Timeout?
+		// We want to proceed even when pods are using emptyDir volumes
+		DeleteEmptyDirData: true,
 	}
 
 	if err := drain.RunCordonOrUncordon(helper, u.Node, true); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("error cordoning node: %v", err)
 	}
 
+	if err := c.patchExcludeFromLB(u.Node); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("error excluding node from load balancer: %v", err)
+	}
+
+	if err := c.Cloud.DeregisterInstance(u); err != nil {
+		return fmt.Errorf("error deregistering instance %q, node %q: %v", u.ID, u.Node.Name, err)
+	}
+
 	if err := drain.RunNodeDrain(helper, u.Node.Name); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("error draining node: %v", err)
 	}
 
@@ -567,7 +666,7 @@ func (c *RollingUpdateCluster) drainNode(u *cloudinstances.CloudInstanceGroupMem
 // deleteNode deletes a node from the k8s API.  It does not delete the underlying instance.
 func (c *RollingUpdateCluster) deleteNode(node *corev1.Node) error {
 	var options metav1.DeleteOptions
-	err := c.K8sClient.CoreV1().Nodes().Delete(node.Name, &options)
+	err := c.K8sClient.CoreV1().Nodes().Delete(c.Ctx, node.Name, options)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
@@ -577,4 +676,23 @@ func (c *RollingUpdateCluster) deleteNode(node *corev1.Node) error {
 	}
 
 	return nil
+}
+
+// UpdateSingleInstance performs a rolling update on a single instance
+func (c *RollingUpdateCluster) UpdateSingleInstance(cloudMember *cloudinstances.CloudInstance, detach bool) error {
+	if detach {
+		if cloudMember.CloudInstanceGroup.InstanceGroup.IsMaster() {
+			klog.Warning("cannot detach master instances. Assuming --surge=false")
+		} else if cloudMember.CloudInstanceGroup.InstanceGroup.Spec.Manager != api.InstanceManagerKarpenter {
+			err := c.detachInstance(cloudMember)
+			if err != nil {
+				return fmt.Errorf("failed to detach instance: %v", err)
+			}
+			if err := c.maybeValidate(" after detaching instance", c.ValidateCount, cloudMember.CloudInstanceGroup); err != nil {
+				return err
+			}
+		}
+	}
+
+	return c.drainTerminateAndWait(cloudMember, 0)
 }

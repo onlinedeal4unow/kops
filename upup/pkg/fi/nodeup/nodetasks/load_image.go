@@ -18,24 +18,18 @@ package nodetasks
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/backoff"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/cloudinit"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
 	"k8s.io/kops/upup/pkg/fi/utils"
 	"k8s.io/kops/util/pkg/hashing"
-)
-
-const (
-	containerdService = "containerd.service"
-	dockerService     = "docker.service"
 )
 
 // LoadImageTask is responsible for downloading a docker image
@@ -46,8 +40,10 @@ type LoadImageTask struct {
 	Runtime string
 }
 
-var _ fi.Task = &LoadImageTask{}
-var _ fi.HasDependencies = &LoadImageTask{}
+var (
+	_ fi.Task            = &LoadImageTask{}
+	_ fi.HasDependencies = &LoadImageTask{}
+)
 
 func (t *LoadImageTask) GetDependencies(tasks map[string]fi.Task) []fi.Task {
 	// LoadImageTask depends on the docker service to ensure we
@@ -72,10 +68,6 @@ func (t *LoadImageTask) GetName() *string {
 		return nil
 	}
 	return &t.Name
-}
-
-func (t *LoadImageTask) SetName(name string) {
-	klog.Fatalf("SetName not supported for LoadImageTask")
 }
 
 func (t *LoadImageTask) String() string {
@@ -134,7 +126,7 @@ func (_ *LoadImageTask) RenderLocal(t *local.LocalTarget, a, e, changes *LoadIma
 	// TODO: Improve the naive gzip format detection by checking the content type bytes "\x1F\x8B\x08"
 	var tarFile string
 	if strings.HasSuffix(localFile, "gz") {
-		tmpDir, err := ioutil.TempDir("", "loadimage")
+		tmpDir, err := os.MkdirTemp("", "loadimage")
 		if err != nil {
 			return fmt.Errorf("error creating temp dir: %v", err)
 		}
@@ -159,7 +151,7 @@ func (_ *LoadImageTask) RenderLocal(t *local.LocalTarget, a, e, changes *LoadIma
 	case "docker":
 		args = []string{"docker", "load", "-i", tarFile}
 	case "containerd":
-		args = []string{"ctr", "images", "import", tarFile}
+		args = []string{"ctr", "--namespace", "k8s.io", "images", "import", tarFile}
 	default:
 		return fmt.Errorf("unknown container runtime: %s", runtime)
 	}

@@ -26,18 +26,18 @@ import (
 	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/loadbalancers"
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/subnets"
 	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 )
 
-//go:generate fitask -type=LB
+// +kops:fitask
 type LB struct {
 	ID            *string
 	Name          *string
 	Subnet        *string
 	VipSubnet     *string
-	Lifecycle     *fi.Lifecycle
+	Lifecycle     fi.Lifecycle
 	PortID        *string
 	SecurityGroup *SecurityGroup
 }
@@ -77,7 +77,6 @@ func waitLoadbalancerActiveProvisioningStatus(client *gophercloud.ServiceClient,
 			klog.Infof("Waiting for Loadbalancer to be ACTIVE...")
 			return false, nil
 		}
-
 	})
 
 	if err == wait.ErrWaitTimeout {
@@ -93,12 +92,6 @@ func (e *LB) GetDependencies(tasks map[string]fi.Task) []fi.Task {
 		if _, ok := task.(*Subnet); ok {
 			deps = append(deps, task)
 		}
-		if _, ok := task.(*ServerGroup); ok {
-			deps = append(deps, task)
-		}
-		if _, ok := task.(*Instance); ok {
-			deps = append(deps, task)
-		}
 		if _, ok := task.(*SecurityGroup); ok {
 			deps = append(deps, task)
 		}
@@ -112,8 +105,8 @@ func (s *LB) CompareWithID() *string {
 	return s.ID
 }
 
-func NewLBTaskFromCloud(cloud openstack.OpenstackCloud, lifecycle *fi.Lifecycle, lb *loadbalancers.LoadBalancer, find *LB) (*LB, error) {
-	osCloud := cloud.(openstack.OpenstackCloud)
+func NewLBTaskFromCloud(cloud openstack.OpenstackCloud, lifecycle fi.Lifecycle, lb *loadbalancers.LoadBalancer, find *LB) (*LB, error) {
+	osCloud := cloud
 	sub, err := subnets.Get(osCloud.NetworkingClient(), lb.VipSubnetID).Extract()
 	if err != nil {
 		return nil, err

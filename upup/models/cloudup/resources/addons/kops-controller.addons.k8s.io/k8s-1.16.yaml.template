@@ -19,48 +19,59 @@ metadata:
   labels:
     k8s-addon: kops-controller.addons.k8s.io
     k8s-app: kops-controller
-    version: v1.18.0-alpha.2
+    version: v1.24.0-alpha.2
 spec:
   selector:
     matchLabels:
       k8s-app: kops-controller
   updateStrategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 1
+    type: OnDelete
   template:
     metadata:
       labels:
         k8s-addon: kops-controller.addons.k8s.io
         k8s-app: kops-controller
-        version: v1.18.0-alpha.2
+        version: v1.24.0-alpha.2
+{{ if UseKopsControllerForNodeBootstrap }}
+      annotations:
+        dns.alpha.kubernetes.io/internal: kops-controller.internal.{{ ClusterName }}
+{{ end }}
     spec:
-      priorityClassName: system-node-critical
+      priorityClassName: system-cluster-critical
       tolerations:
-      - key: "node-role.kubernetes.io/master"
+      - key: node.cloudprovider.kubernetes.io/uninitialized
+        operator: Exists
+      - key: node.kubernetes.io/not-ready
+        operator: Exists
+      - key: node-role.kubernetes.io/master
         operator: Exists
       nodeSelector:
         node-role.kubernetes.io/master: ""
+        kops.k8s.io/kops-controller-pki: ""
       dnsPolicy: Default  # Don't use cluster DNS (we are likely running before kube-dns)
       hostNetwork: true
       serviceAccount: kops-controller
       containers:
       - name: kops-controller
-        image: kope/kops-controller:1.18.0-alpha.2
+        image: k8s.gcr.io/kops/kops-controller:1.24.0-alpha.2
         volumeMounts:
 {{ if .UseHostCertificates }}
         - mountPath: /etc/ssl/certs
           name: etc-ssl-certs
           readOnly: true
 {{ end }}
-        - mountPath: /etc/kubernetes/kops-controller/
+        - mountPath: /etc/kubernetes/kops-controller/config/
           name: kops-controller-config
+        - mountPath: /etc/kubernetes/kops-controller/pki/
+          name: kops-controller-pki
         command:
 {{ range $arg := KopsControllerArgv }}
         - "{{ $arg }}"
 {{ end }}
-{{- if KopsSystemEnv }}
         env:
+        - name: KUBERNETES_SERVICE_HOST
+          value: "127.0.0.1"
+{{- if KopsSystemEnv }}
 {{ range $var := KopsSystemEnv }}
         - name: {{ $var.Name }}
           value: {{ $var.Value }}
@@ -82,7 +93,10 @@ spec:
       - name: kops-controller-config
         configMap:
           name: kops-controller
-
+      - name: kops-controller-pki
+        hostPath:
+          path: /etc/kubernetes/kops-controller/
+          type: Directory
 ---
 
 apiVersion: v1
@@ -111,6 +125,16 @@ rules:
   - list
   - watch
   - patch
+{{- if GossipDomains }}
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - list
+  - watch
+{{- end }}
 
 ---
 
@@ -150,8 +174,10 @@ rules:
   - create
 - apiGroups:
   - ""
+  - coordination.k8s.io
   resources:
   - configmaps
+  - leases
   resourceNames:
   - kops-controller-leader
   verbs:
@@ -165,10 +191,23 @@ rules:
 # We can't restrict creation of objects by name
 - apiGroups:
   - ""
+  - coordination.k8s.io
+  resources:
+  - configmaps
+  - leases
+  verbs:
+  - create
+{{- if GossipDomains }}
+- apiGroups:
+  - ""
   resources:
   - configmaps
   verbs:
-  - create
+  - get
+  - watch
+  - patch
+  resourceNames: [ "coredns" ]
+{{- end }}
 
 ---
 
@@ -187,3 +226,8 @@ subjects:
 - apiGroup: rbac.authorization.k8s.io
   kind: User
   name: system:serviceaccount:kube-system:kops-controller
+
+{{- range $service := KopsController.GossipServices }}
+---
+{{ KubeObjectToApplyYAML $service }}
+{{- end }}

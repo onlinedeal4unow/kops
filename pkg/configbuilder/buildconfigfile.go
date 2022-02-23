@@ -18,21 +18,20 @@ package configbuilder
 
 import (
 	"fmt"
-
 	"reflect"
 	"strconv"
 	"strings"
 
-	"gopkg.in/yaml.v2"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/util/pkg/reflectutils"
+	"sigs.k8s.io/yaml"
 )
 
 // BuildConfigYaml reflects the options interface and extracts the parameters for the config file
 func BuildConfigYaml(options *kops.KubeSchedulerConfig, target interface{}) ([]byte, error) {
-	walker := func(path string, field *reflect.StructField, val reflect.Value) error {
+	walker := func(path *reflectutils.FieldPath, field *reflect.StructField, val reflect.Value) error {
 		if field == nil {
 			klog.V(8).Infof("ignoring non-field: %s", path)
 			return nil
@@ -75,10 +74,9 @@ func BuildConfigYaml(options *kops.KubeSchedulerConfig, target interface{}) ([]b
 		}
 
 		return reflectutils.SkipReflection
-
 	}
 
-	err := reflectutils.ReflectRecursive(reflect.ValueOf(options), walker)
+	err := reflectutils.ReflectRecursive(reflect.ValueOf(options), walker, &reflectutils.ReflectOptions{DeprecatedDoubleVisit: true})
 	if err != nil {
 		return nil, fmt.Errorf("BuildFlagsList to reflect value: %s", err)
 	}

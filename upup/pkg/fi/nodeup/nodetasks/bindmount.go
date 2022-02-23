@@ -18,11 +18,11 @@ package nodetasks
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/cloudinit"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
@@ -53,10 +53,6 @@ var _ fi.HasName = &Archive{}
 
 func (e *BindMount) GetName() *string {
 	return fi.String("BindMount-" + e.Mountpoint)
-}
-
-func (e *BindMount) SetName(name string) {
-	klog.Fatalf("SetName not supported for BindMount task")
 }
 
 var _ fi.HasDependencies = &BindMount{}
@@ -98,7 +94,7 @@ func findTaskInSlice(tasks []fi.Task, task fi.Task) int {
 }
 
 func (e *BindMount) Find(c *fi.Context) (*BindMount, error) {
-	mounts, err := ioutil.ReadFile("/proc/self/mountinfo")
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
 	if err != nil {
 		return nil, fmt.Errorf("error reading /proc/self/mountinfo: %v", err)
 	}
@@ -205,7 +201,7 @@ func (e *BindMount) execute(t Executor) error {
 		case "rshared":
 			makeOptions = append(makeOptions, "--make-rshared")
 
-		case "exec", "noexec", "nosuid", "nodev":
+		case "exec", "noexec", "suid", "nosuid", "dev", "nodev":
 			remountOptions = append(remountOptions, option)
 
 		default:

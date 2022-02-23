@@ -6,6 +6,7 @@ go_library(
         "api_loadbalancer.go",
         "context.go",
         "droplets.go",
+        "network.go",
     ],
     importpath = "k8s.io/kops/pkg/model/domodel",
     visibility = ["//visibility:public"],
@@ -16,6 +17,5 @@ go_library(
         "//upup/pkg/fi:go_default_library",
         "//upup/pkg/fi/cloudup/do:go_default_library",
         "//upup/pkg/fi/cloudup/dotasks:go_default_library",
-        "//upup/pkg/fi/fitasks:go_default_library",
     ],
 )

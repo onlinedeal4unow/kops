@@ -1,7 +1,7 @@
 # Rolling Updates
 
-Upgrading and modifying a k8s cluster usually requires the replacement of cloud instances.
-In order to avoid loss of service and other disruption, Kops replaces cloud instances
+Upgrading and modifying a Kubernetes cluster usually requires the replacement of cloud instances.
+In order to avoid loss of service and other disruption, kOps replaces cloud instances
 incrementally with a rolling update.
 
 Rolling updates are performed using
@@ -20,11 +20,12 @@ Cloud instances are chosen to be updated (replaced) if at least one of the follo
 ## Order of instance groups
 
 A rolling update will update instances from one instance group at a time. First, it will update
-bastion instance groups. Next, it will update master instance groups. Finally, it will update
-node instance groups.
+bastion instance groups. Next, it will update master instance groups, then apiserver instance
+groups. Finally, it will update node instance groups.
+Within an instance group role it will update instance groups in alphabetical order.
 
 A rolling update may be restricted to instance groups of particular roles
-("Bastion", "Master", and/or "Node") with the `--instance-group-roles` flag.
+("Bastion", "Master", "APIServer", and/or "Node") with the `--instance-group-roles` flag.
 A rolling update may be restricted to particular instance groups with the `--instance-group` flag.
 
 ## Updating an instance group
@@ -113,7 +114,9 @@ update. Instead of first draining and terminating an instance and then creating 
 it effectively first creates a new instance and then drains and terminates the old one.
 
 Surging is implemented by "detaching" instances, making them not count toward the desired
-number of instances in the instance group. The detached instances are updated last;
+number of instances in the instance group. This causes the cloud provider to create new
+instances in order to satisfy the group's desired number.
+The detached instances are drained and terminated last;
 when they are terminated the cloud provider does not replace them.
 
 The `maxSurge` is the maximum number of extra instances that can be created during the update.
@@ -144,12 +147,14 @@ then creates any remaining surge instances.
 
 #### Disabling rolling updates
 
-Rolling updates may be disabled for an instance group by setting both `maxSurge` and `maxUnavailable`
-to `0`.
+Rolling updates may be partially disabled for an instance group by setting the `drainAndTerminate`
+field to `false`.
 
 ```yaml
 spec:
   rollingUpdate:
-    maxSurge: 0
-    maxUnavailable: 0
+    drainAndTerminate: false
 ```
+
+Nodes needing update will still be tainted. If `maxSurge` is nonzero, up to that many extra
+nodes will still be created.

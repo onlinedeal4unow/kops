@@ -17,7 +17,6 @@ limitations under the License.
 package components
 
 import (
-	"k8s.io/klog"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
@@ -48,16 +47,10 @@ func (b *DockerOptionsBuilder) BuildOptions(o interface{}) error {
 
 	// Set the Docker version for known Kubernetes versions
 	if fi.StringValue(clusterSpec.Docker.Version) == "" {
-		if b.IsKubernetesGTE("1.18") {
-			docker.Version = fi.String("19.03.8")
-		} else if b.IsKubernetesGTE("1.17") {
-			docker.Version = fi.String("19.03.4")
-		} else if b.IsKubernetesGTE("1.16") {
-			docker.Version = fi.String("18.09.9")
-		} else if b.IsKubernetesGTE("1.12") {
-			docker.Version = fi.String("18.06.3")
+		if b.IsKubernetesGTE("1.21") {
+			docker.Version = fi.String("20.10.9")
 		} else {
-			docker.Version = fi.String("17.03.2")
+			docker.Version = fi.String("19.03.15")
 		}
 	}
 
@@ -69,28 +62,32 @@ func (b *DockerOptionsBuilder) BuildOptions(o interface{}) error {
 		clusterSpec.Docker.LogOpt = append(clusterSpec.Docker.LogOpt, "max-file=5")
 	}
 
-	docker.LogLevel = fi.String("warn")
+	docker.LogLevel = fi.String("info")
 	docker.IPTables = fi.Bool(false)
 	docker.IPMasq = fi.Bool(false)
 
 	// Note the alternative syntax... with a comma nodeup will try each of the filesystems in turn
-	if b.IsKubernetesGTE("1.11") {
-		// TODO(justinsb): figure out whether to use overlay2 on AWS jessie:
-		// The ContainerOS image now has docker configured to use overlay2 out-of-the-box
-		// and it is an error to specify the flag twice.
-		// But Jessie (still our default AWS image) isn't recommended by docker with overlay2
-		// (though that may be a kernel issue, and we run a custom kernel on our default image)
-		// But we still need to worry about users running generic AMIs (e.g. stock jessie)
-		docker.Storage = fi.String("overlay2,overlay,aufs")
-	} else {
-		docker.Storage = fi.String("overlay,aufs")
-	}
+	// TODO(justinsb): The ContainerOS image now has docker configured to use overlay2 out-of-the-box
+	// and it is an error to specify the flag twice.
+	docker.Storage = fi.String("overlay2,overlay,aufs")
 
-	networking := clusterSpec.Networking
-	if networking == nil || networking.Classic != nil {
-		klog.Warningf("using deprecated (classic) networking")
-		docker.Bridge = fi.String("cbr0")
+	// Set systemd as the default cgroup driver in docker from k8s 1.20.
+	if b.IsKubernetesGTE("1.20") && getDockerCgroupDriver(docker.ExecOpt) == "" {
+		docker.ExecOpt = append(docker.ExecOpt, "native.cgroupdriver=systemd")
 	}
 
 	return nil
+}
+
+// checks if cgroup-driver is configured or not for docker or not.
+func getDockerCgroupDriver(execOpts []string) string {
+	for _, value := range execOpts {
+		if value == "native.cgroupdriver=systemd" {
+			return "systemd"
+		} else if value == "native.cgroupdriver=cgroupfs" {
+			return "cgroupfs"
+		}
+	}
+
+	return ""
 }

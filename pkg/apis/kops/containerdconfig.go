@@ -18,18 +18,33 @@ package kops
 
 // ContainerdConfig is the configuration for containerd
 type ContainerdConfig struct {
-	// Address of containerd's GRPC server (default "/run/containerd/containerd.sock")
+	// Address of containerd's GRPC server (default "/run/containerd/containerd.sock").
 	Address *string `json:"address,omitempty" flag:"address"`
-	// Complete containerd config file provided by the user
+	// ConfigOverride is the complete containerd config file provided by the user.
 	ConfigOverride *string `json:"configOverride,omitempty"`
-	// Logging level [trace, debug, info, warn, error, fatal, panic] (default "info")
+	// LogLevel controls the logging details [trace, debug, info, warn, error, fatal, panic] (default "info").
 	LogLevel *string `json:"logLevel,omitempty" flag:"log-level"`
-	// Directory for persistent data (default "/var/lib/containerd")
+	// Packages overrides the URL and hash for the packages.
+	Packages *PackagesConfig `json:"packages,omitempty"`
+	// RegistryMirrors is list of image registries
+	RegistryMirrors map[string][]string `json:"registryMirrors,omitempty"`
+	// Root directory for persistent data (default "/var/lib/containerd").
 	Root *string `json:"root,omitempty" flag:"root"`
-	// Prevents kops from installing and modifying containerd in any way (default "false")
+	// SkipInstall prevents kOps from installing and modifying containerd in any way (default "false").
 	SkipInstall bool `json:"skipInstall,omitempty"`
-	// Directory for execution state files (default "/run/containerd")
+	// State directory for execution state files (default "/run/containerd").
 	State *string `json:"state,omitempty" flag:"state"`
-	// Consumed by nodeup and used to pick the containerd version
+	// Version used to pick the containerd package.
 	Version *string `json:"version,omitempty"`
+	// NvidiaGPU configures the Nvidia GPU runtime.
+	NvidiaGPU *NvidiaGPUConfig `json:"nvidiaGPU,omitempty"`
+}
+
+type NvidiaGPUConfig struct {
+	// Package is the name of the nvidia driver package that will be installed.
+	// Default is "nvidia-headless-460-server".
+	DriverPackage string `json:"package,omitempty"`
+	// Enabled determines if kOps will install the Nvidia GPU runtime and drivers.
+	// They will only be installed on intances that has an Nvidia GPU.
+	Enabled *bool `json:"enabled,omitempty"`
 }

@@ -3,18 +3,7 @@
 
 ## kops toolbox
 
-Misc infrequently used commands.
-
-### Synopsis
-
-Misc infrequently used commands.
-
-### Examples
-
-```
-  # Dump cluster information
-  kops toolbox dump --name k8s-cluster.example.com
-```
+Miscellaneous, infrequently used commands.
 
 ### Options
 
@@ -25,7 +14,7 @@ Misc infrequently used commands.
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -34,6 +23,7 @@ Misc infrequently used commands.
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -44,9 +34,8 @@ Misc infrequently used commands.
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
-* [kops toolbox bundle](kops_toolbox_bundle.md)	 - Bundle cluster information
-* [kops toolbox convert-imported](kops_toolbox_convert-imported.md)	 - Convert an imported cluster into a kops cluster.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
 * [kops toolbox dump](kops_toolbox_dump.md)	 - Dump cluster information
+* [kops toolbox instance-selector](kops_toolbox_instance-selector.md)	 - Generate instance-group specs by providing resource specs such as vcpus and memory.
 * [kops toolbox template](kops_toolbox_template.md)	 - Generate cluster.yaml from template
 

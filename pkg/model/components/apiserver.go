@@ -21,12 +21,12 @@ import (
 	"strings"
 
 	v1 "k8s.io/api/core/v1"
+
 	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/featureflag"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
 
-	"github.com/blang/semver"
+	"github.com/blang/semver/v4"
 )
 
 // KubeAPIServerOptionsBuilder adds options for the apiserver to the model
@@ -84,57 +84,14 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(o interface{}) error {
 	} else if clusterSpec.Authorization.AlwaysAllow != nil {
 		clusterSpec.KubeAPIServer.AuthorizationMode = fi.String("AlwaysAllow")
 	} else if clusterSpec.Authorization.RBAC != nil {
-		var modes []string
-
-		if b.IsKubernetesGTE("1.10") {
-			if fi.BoolValue(clusterSpec.KubeAPIServer.EnableBootstrapAuthToken) {
-				// Enable the Node authorizer, used for special per-node RBAC policies
-				modes = append(modes, "Node")
-			}
-		}
-		modes = append(modes, "RBAC")
-
-		clusterSpec.KubeAPIServer.AuthorizationMode = fi.String(strings.Join(modes, ","))
-	}
-
-	if clusterSpec.KubeAPIServer.EtcdQuorumRead == nil {
-		// 1.9 changed etcd-quorum-reads default to true
-		// There's a balance between some bugs which are attributed to not having etcd-quorum-reads,
-		// and the poor implementation of quorum-reads in etcd2.
-
-		etcdHA := false
-		etcdV2 := true
-		for _, c := range clusterSpec.EtcdClusters {
-			if len(c.Members) > 1 {
-				etcdHA = true
-			}
-			if c.Version != "" && !strings.HasPrefix(c.Version, "2.") {
-				etcdV2 = false
-			}
-		}
-
-		if !etcdV2 {
-			// etcd3 quorum reads are cheap.  Stick with default (which is to enable quorum reads)
-			clusterSpec.KubeAPIServer.EtcdQuorumRead = nil
-		} else {
-			// etcd2 quorum reads go through raft => write to disk => expensive
-			if !etcdHA {
-				// Turn off quorum reads - they still go through raft, but don't serve any purpose in non-HA clusters.
-				clusterSpec.KubeAPIServer.EtcdQuorumRead = fi.Bool(false)
-			} else {
-				// The problematic case.  We risk exposing more bugs, but against that we have to balance performance.
-				// For now we turn off quorum reads - it's a bad enough performance regression
-				// We'll likely make this default to true once we can set IOPS on the etcd volume and can easily upgrade to etcd3
-				clusterSpec.KubeAPIServer.EtcdQuorumRead = fi.Bool(false)
-			}
-		}
+		clusterSpec.KubeAPIServer.AuthorizationMode = fi.String("Node,RBAC")
 	}
 
 	if err := b.configureAggregation(clusterSpec); err != nil {
 		return nil
 	}
 
-	image, err := Image("kube-apiserver", b.Architecture(), clusterSpec, b.AssetBuilder)
+	image, err := Image("kube-apiserver", clusterSpec, b.AssetBuilder)
 	if err != nil {
 		return err
 	}
@@ -147,79 +104,50 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(o interface{}) error {
 		c.CloudProvider = "gce"
 	case kops.CloudProviderDO:
 		c.CloudProvider = "external"
-	case kops.CloudProviderVSphere:
-		c.CloudProvider = "vsphere"
-	case kops.CloudProviderBareMetal:
-		// for baremetal, we don't specify a cloudprovider to apiserver
 	case kops.CloudProviderOpenstack:
 		c.CloudProvider = "openstack"
-	case kops.CloudProviderALI:
-		c.CloudProvider = "alicloud"
+	case kops.CloudProviderAzure:
+		c.CloudProvider = "azure"
 	default:
 		return fmt.Errorf("unknown cloudprovider %q", clusterSpec.CloudProvider)
 	}
 
-	if featureflag.EnableExternalCloudController.Enabled() && clusterSpec.ExternalCloudControllerManager != nil {
+	if clusterSpec.ExternalCloudControllerManager != nil {
 		c.CloudProvider = "external"
 	}
 
 	c.LogLevel = 2
 	c.SecurePort = 443
 
-	if b.IsKubernetesGTE("1.10") {
-		c.BindAddress = "0.0.0.0"
-		c.InsecureBindAddress = "127.0.0.1"
+	if clusterSpec.IsIPv6Only() {
+		c.BindAddress = "::"
 	} else {
-		c.Address = "127.0.0.1"
+		c.BindAddress = "0.0.0.0"
 	}
 
 	c.AllowPrivileged = fi.Bool(true)
 	c.ServiceClusterIPRange = clusterSpec.ServiceClusterIPRange
-	c.EtcdServers = []string{"http://127.0.0.1:4001"}
-	c.EtcdServersOverrides = []string{"/events#http://127.0.0.1:4002"}
+	c.EtcdServers = nil
+	c.EtcdServersOverrides = nil
+
+	for _, etcdCluster := range clusterSpec.EtcdClusters {
+		switch etcdCluster.Name {
+		case "main":
+			c.EtcdServers = append(c.EtcdServers, "https://127.0.0.1:4001")
+		case "events":
+			c.EtcdServersOverrides = append(c.EtcdServersOverrides, "/events#https://127.0.0.1:4002")
+		}
+	}
 
 	// TODO: We can probably rewrite these more clearly in descending order
-	if b.IsKubernetesLT("1.10") {
-		c.AdmissionControl = []string{
-			"Initializers",
-			"NamespaceLifecycle",
-			"LimitRanger",
-			"ServiceAccount",
-			"PersistentVolumeLabel",
-			"DefaultStorageClass",
-			"DefaultTolerationSeconds",
-			"MutatingAdmissionWebhook",
-			"ValidatingAdmissionWebhook",
-			"NodeRestriction",
-			"ResourceQuota",
-		}
-	}
 	// Based on recommendations from:
 	// https://kubernetes.io/docs/admin/admission-controllers/#is-there-a-recommended-set-of-admission-controllers-to-use
-	if b.IsKubernetesGTE("1.10") && b.IsKubernetesLT("1.12") {
-		c.EnableAdmissionPlugins = []string{
-			"Initializers",
-			"NamespaceLifecycle",
-			"LimitRanger",
-			"ServiceAccount",
-			"PersistentVolumeLabel",
-			"DefaultStorageClass",
-			"DefaultTolerationSeconds",
-			"MutatingAdmissionWebhook",
-			"ValidatingAdmissionWebhook",
-			"NodeRestriction",
-			"ResourceQuota",
-		}
-		c.EnableAdmissionPlugins = append(c.EnableAdmissionPlugins, c.AppendAdmissionPlugins...)
-	}
-	// Based on recommendations from:
-	// https://kubernetes.io/docs/admin/admission-controllers/#is-there-a-recommended-set-of-admission-controllers-to-use
-	if b.IsKubernetesGTE("1.12") {
+	{
 		c.EnableAdmissionPlugins = []string{
 			"NamespaceLifecycle",
 			"LimitRanger",
 			"ServiceAccount",
-			"PersistentVolumeLabel",
+			//"PersistentVolumeLabel",
 			"DefaultStorageClass",
 			"DefaultTolerationSeconds",
 			"MutatingAdmissionWebhook",
@@ -233,8 +161,48 @@ func (b *KubeAPIServerOptionsBuilder) BuildOptions(o interface{}) error {
 	// We make sure to disable AnonymousAuth
 	c.AnonymousAuth = fi.Bool(false)
 
-	// FIXME : Disable the insecure port when kubernetes issue #43784 is fixed
-	c.InsecurePort = 8080
+	// We query via the kube-apiserver-healthcheck proxy, which listens on port 3990
+	c.InsecureBindAddress = ""
+	if b.IsKubernetesGTE("1.20") {
+		c.InsecurePort = nil
+	} else {
+		c.InsecurePort = fi.Int32(0)
+	}
+
+	// If metrics-server is enabled, we want aggregator routing enabled so that requests are load balanced.
+	metricsServer := clusterSpec.MetricsServer
+	if metricsServer != nil && fi.BoolValue(metricsServer.Enabled) {
+		if c.EnableAggregatorRouting == nil {
+			c.EnableAggregatorRouting = fi.Bool(true)
+		}
+	}
+
+	if c.FeatureGates == nil {
+		c.FeatureGates = make(map[string]string)
+	}
+
+	if clusterSpec.CloudConfig != nil && clusterSpec.CloudConfig.AWSEBSCSIDriver != nil && fi.BoolValue(clusterSpec.CloudConfig.AWSEBSCSIDriver.Enabled) {
+
+		if b.IsKubernetesLT("1.21.0") {
+			if _, found := c.FeatureGates["CSIMigrationAWSComplete"]; !found {
+				c.FeatureGates["CSIMigrationAWSComplete"] = "true"
+			}
+		} else {
+			if _, found := c.FeatureGates["InTreePluginAWSUnregister"]; !found {
+				c.FeatureGates["InTreePluginAWSUnregister"] = "true"
+			}
+		}
+
+		if _, found := c.FeatureGates["CSIMigrationAWS"]; !found {
+			c.FeatureGates["CSIMigrationAWS"] = "true"
+		}
+	}
+
+	if b.IsKubernetesLT("1.20") && clusterSpec.ServiceAccountIssuerDiscovery != nil && fi.BoolValue(&clusterSpec.ServiceAccountIssuerDiscovery.EnableAWSOIDCProvider) {
+		if _, found := c.FeatureGates["ServiceAccountIssuerDiscovery"]; !found {
+			c.FeatureGates["ServiceAccountIssuerDiscovery"] = "true"
+		}
+	}
 
 	return nil
 }

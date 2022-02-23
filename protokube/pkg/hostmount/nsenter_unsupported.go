@@ -1,3 +1,4 @@
+//go:build !linux
 // +build !linux
 
 /*
@@ -21,7 +22,7 @@ package hostmount
 import (
 	"errors"
 
-	"k8s.io/utils/mount"
+	"k8s.io/mount-utils"
 	"k8s.io/utils/nsenter"
 )
 
@@ -30,13 +31,27 @@ func New(ne *nsenter.Nsenter) *Mounter {
 }
 
 // Mounter implements mount.Interface for unsupported platforms
-type Mounter struct {
-}
+type Mounter struct{}
 
 var errUnsupported = errors.New("util/mount on this platform is not supported")
 
 // Mount always returns an error on unsupported platforms
 func (mounter *Mounter) Mount(source string, target string, fstype string, options []string) error {
+	return errUnsupported
+}
+
+// MountSensitive always returns an error on unsupported platforms
+func (n *Mounter) MountSensitive(source string, target string, fstype string, options []string, sensitiveOptions []string) error {
+	return errUnsupported
+}
+
+// MountSensitiveWithoutSystemd always returns an error on unsupported platforms
+func (n *Mounter) MountSensitiveWithoutSystemd(source string, target string, fstype string, options []string, sensitiveOptions []string) error {
+	return errUnsupported
+}
+
+// MountSensitiveWithoutSystemdWithMountFlags always returns an error on unsupported platforms
+func (n *Mounter) MountSensitiveWithoutSystemdWithMountFlags(source string, target string, fstype string, options []string, sensitiveOptions []string, mountFlags []string) error {
 	return errUnsupported
 }
 

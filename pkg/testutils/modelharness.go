@@ -18,7 +18,7 @@ package testutils
 
 import (
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path"
 	"sort"
 	"strings"
@@ -41,7 +41,7 @@ type Model struct {
 // LoadModel loads a cluster and instancegroups from a cluster.yaml file found in basedir
 func LoadModel(basedir string) (*Model, error) {
 	clusterYamlPath := path.Join(basedir, "cluster.yaml")
-	clusterYaml, err := ioutil.ReadFile(clusterYamlPath)
+	clusterYaml, err := os.ReadFile(clusterYamlPath)
 	if err != nil {
 		return nil, fmt.Errorf("error reading file %q: %v", clusterYamlPath, err)
 	}
@@ -76,7 +76,7 @@ func LoadModel(basedir string) (*Model, error) {
 	return spec, nil
 }
 
-func ValidateTasks(t *testing.T, basedir string, context *fi.ModelBuilderContext) {
+func ValidateTasks(t *testing.T, expectedFile string, context *fi.ModelBuilderContext) {
 	var keys []string
 	for key := range context.Tasks {
 		keys = append(keys, key)
@@ -96,7 +96,8 @@ func ValidateTasks(t *testing.T, basedir string, context *fi.ModelBuilderContext
 	actualTasksYaml := strings.Join(yamls, "\n---\n")
 	actualTasksYaml = strings.TrimSpace(actualTasksYaml)
 
-	tasksYamlPath := path.Join(basedir, "tasks.yaml")
+	golden.AssertMatchesFile(t, actualTasksYaml, expectedFile)
 
-	golden.AssertMatchesFile(t, actualTasksYaml, tasksYamlPath)
+	// Asserts that FindTaskDependencies doesn't call klog.Fatalf()
+	fi.FindTaskDependencies(context.Tasks)
 }

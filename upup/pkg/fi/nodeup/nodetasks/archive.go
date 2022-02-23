@@ -19,7 +19,6 @@ package nodetasks
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path"
@@ -28,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/cloudinit"
 	"k8s.io/kops/upup/pkg/fi/nodeup/local"
@@ -77,10 +76,6 @@ func (e *Archive) GetName() *string {
 	return &e.Name
 }
 
-func (e *Archive) SetName(name string) {
-	e.Name = name
-}
-
 // String returns a string representation, implementing the Stringer interface
 func (e *Archive) String() string {
 	return fmt.Sprintf("Archive: %s %s->%s", e.Name, e.Source, e.TargetDir)
@@ -97,7 +92,7 @@ func (e *Archive) Dir() string {
 func (e *Archive) Find(c *fi.Context) (*Archive, error) {
 	// We write a marker file to prevent re-execution
 	localStateFile := path.Join(localArchiveStateDir, e.Name)
-	stateBytes, err := ioutil.ReadFile(localStateFile)
+	stateBytes, err := os.ReadFile(localStateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			stateBytes = nil
@@ -144,7 +139,7 @@ func (_ *Archive) RenderLocal(t *local.LocalTarget, a, e, changes *Archive) erro
 		klog.Infof("Installing archive %q", e.Name)
 
 		localFile := path.Join(localArchiveDir, e.Name)
-		if err := os.MkdirAll(localArchiveDir, 0755); err != nil {
+		if err := os.MkdirAll(localArchiveDir, 0o755); err != nil {
 			return fmt.Errorf("error creating directories %q: %v", localArchiveDir, err)
 		}
 
@@ -162,7 +157,7 @@ func (_ *Archive) RenderLocal(t *local.LocalTarget, a, e, changes *Archive) erro
 
 		if len(e.MapFiles) == 0 {
 			targetDir := e.TargetDir
-			if err := os.MkdirAll(targetDir, 0755); err != nil {
+			if err := os.MkdirAll(targetDir, 0o755); err != nil {
 				return fmt.Errorf("error creating directories %q: %v", targetDir, err)
 			}
 
@@ -180,7 +175,7 @@ func (_ *Archive) RenderLocal(t *local.LocalTarget, a, e, changes *Archive) erro
 			for src, dest := range e.MapFiles {
 				stripCount := strings.Count(src, "/")
 				targetDir := filepath.Join(e.TargetDir, dest)
-				if err := os.MkdirAll(targetDir, 0755); err != nil {
+				if err := os.MkdirAll(targetDir, 0o755); err != nil {
 					return fmt.Errorf("error creating directories %q: %v", targetDir, err)
 				}
 
@@ -196,7 +191,7 @@ func (_ *Archive) RenderLocal(t *local.LocalTarget, a, e, changes *Archive) erro
 
 		// We write a marker file to prevent re-execution
 		localStateFile := path.Join(localArchiveStateDir, e.Name)
-		if err := os.MkdirAll(localArchiveStateDir, 0755); err != nil {
+		if err := os.MkdirAll(localArchiveStateDir, 0o755); err != nil {
 			return fmt.Errorf("error creating directories %q: %v", localArchiveStateDir, err)
 		}
 
@@ -205,7 +200,7 @@ func (_ *Archive) RenderLocal(t *local.LocalTarget, a, e, changes *Archive) erro
 			return fmt.Errorf("error marshaling archive state: %v", err)
 		}
 
-		if err := ioutil.WriteFile(localStateFile, state, 0644); err != nil {
+		if err := os.WriteFile(localStateFile, state, 0o644); err != nil {
 			return fmt.Errorf("error writing archive state: %v", err)
 		}
 	} else {
@@ -222,10 +217,10 @@ func (_ *Archive) RenderCloudInit(t *cloudinit.CloudInitTarget, a, e, changes *A
 	archiveName := e.Name
 
 	localFile := path.Join(localArchiveDir, archiveName)
-	t.AddMkdirpCommand(localArchiveDir, 0755)
+	t.AddMkdirpCommand(localArchiveDir, 0o755)
 
 	targetDir := e.TargetDir
-	t.AddMkdirpCommand(targetDir, 0755)
+	t.AddMkdirpCommand(targetDir, 0o755)
 
 	url := e.Source
 	t.AddDownloadCommand(cloudinit.Always, url, localFile)

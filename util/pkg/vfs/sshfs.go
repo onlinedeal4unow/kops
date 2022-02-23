@@ -27,7 +27,7 @@ import (
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 type SSHPath struct {
@@ -85,6 +85,7 @@ func (p *SSHPath) newClient() (*sftp.Client, error) {
 
 	return sftp.NewClientPipe(stdout, stdin)
 }
+
 func (p *SSHPath) Path() string {
 	return "ssh://" + p.server + p.path
 }
@@ -109,6 +110,10 @@ func (p *SSHPath) Remove() error {
 	}
 
 	return nil
+}
+
+func (p *SSHPath) RemoveAllVersions() error {
+	return p.Remove()
 }
 
 func (p *SSHPath) Join(relativePath ...string) Path {

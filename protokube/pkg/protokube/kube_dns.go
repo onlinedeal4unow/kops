@@ -19,7 +19,7 @@ package protokube
 import (
 	"time"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/dns-controller/pkg/dns"
 )
 
@@ -30,7 +30,6 @@ type DNSProvider interface {
 
 	// RemoveRecordsImmediate deletes the specified DNS records, without batching etc
 	RemoveRecordsImmediate(records []dns.Record) error
-
 	Run()
 }
 

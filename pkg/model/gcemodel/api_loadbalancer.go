@@ -20,15 +20,15 @@ import (
 	"fmt"
 
 	"k8s.io/kops/pkg/apis/kops"
+	"k8s.io/kops/pkg/wellknownports"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
-	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
 // APILoadBalancerBuilder builds a LoadBalancer for accessing the API
 type APILoadBalancerBuilder struct {
 	*GCEModelContext
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &APILoadBalancerBuilder{}
@@ -55,13 +55,31 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 		return fmt.Errorf("unhandled LoadBalancer type %q", lbSpec.Type)
 	}
 
+	healthCheck := &gcetasks.Healthcheck{
+		Name:      s(b.NameForHealthcheck("api")),
+		Port:      i64(wellknownports.KubeAPIServerHealthCheck),
+		Lifecycle: b.Lifecycle,
+	}
+
+	c.AddTask(healthCheck)
+
 	targetPool := &gcetasks.TargetPool{
-		Name: s(b.NameForTargetPool("api")),
+		Name:      s(b.NameForTargetPool("api")),
+		Lifecycle: b.Lifecycle,
 	}
 	c.AddTask(targetPool)
 
+	poolHealthCheck := &gcetasks.PoolHealthCheck{
+		Name:        s(b.NameForPoolHealthcheck("api")),
+		Healthcheck: healthCheck,
+		Pool:        targetPool,
+		Lifecycle:   b.Lifecycle,
+	}
+	c.AddTask(poolHealthCheck)
+
 	ipAddress := &gcetasks.Address{
-		Name: s(b.NameForIPAddress("api")),
+		Name:      s(b.NameForIPAddress("api")),
+		Lifecycle: b.Lifecycle,
 	}
 	c.AddTask(ipAddress)
 
@@ -78,27 +96,18 @@ func (b *APILoadBalancerBuilder) Build(c *fi.ModelBuilderContext) error {
 
 	{
 		// Ensure the IP address is included in our certificate
-		// TODO: I don't love this technique for finding the task by name & modifying it
-		masterKeypairTask, found := c.Tasks["Keypair/master"]
-		if !found {
-			return fmt.Errorf("keypair/master task not found")
-		}
-		masterKeypair := masterKeypairTask.(*fitasks.Keypair)
-		masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, ipAddress)
+		ipAddress.ForAPIServer = true
 	}
 
 	// Allow traffic into the API (port 443) from KubernetesAPIAccess CIDRs
 	{
-		t := &gcetasks.FirewallRule{
-			Name:         s(b.NameForFirewallRule("https-api")),
+		b.AddFirewallRulesTasks(c, "https-api", &gcetasks.FirewallRule{
 			Lifecycle:    b.Lifecycle,
 			Network:      b.LinkToNetwork(),
 			SourceRanges: b.Cluster.Spec.KubernetesAPIAccess,
 			TargetTags:   []string{b.GCETagForRole(kops.InstanceGroupRoleMaster)},
 			Allowed:      []string{"tcp:443"},
-		}
-		c.AddTask(t)
+		})
 	}
 	return nil
-
 }

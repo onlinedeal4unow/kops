@@ -17,64 +17,21 @@ limitations under the License.
 package model
 
 import (
-	"path"
 	"testing"
 
-	"k8s.io/kops/pkg/apis/kops"
-	"k8s.io/kops/pkg/apis/nodeup"
-	"k8s.io/kops/pkg/testutils"
 	"k8s.io/kops/upup/pkg/fi"
 )
 
-func TestProtokubeBuilder_Docker(t *testing.T) {
-	runProtokubeBuilderTest(t, "docker")
+func TestProtokubeBuilder(t *testing.T) {
+	RunGoldenTest(t, "tests/protokube/", "protokube", func(nodeupModelContext *NodeupModelContext, target *fi.ModelBuilderContext) error {
+		builder := ProtokubeBuilder{NodeupModelContext: nodeupModelContext}
+		populateAssets(nodeupModelContext)
+		return builder.Build(target)
+	})
 }
 
-func TestProtokubeBuilder_containerd(t *testing.T) {
-	runProtokubeBuilderTest(t, "containerd")
-}
-
-func runProtokubeBuilderTest(t *testing.T, key string) {
-	basedir := path.Join("tests/protokube/", key)
-
-	context := &fi.ModelBuilderContext{
-		Tasks: make(map[string]fi.Task),
-	}
-	nodeUpModelContext, err := BuildNodeupModelContext(basedir)
-	if err != nil {
-		t.Fatalf("error loading model %q: %v", basedir, err)
-		return
-	}
-
-	cluster := nodeUpModelContext.Cluster
-	if cluster.Spec.MasterKubelet == nil {
-		cluster.Spec.MasterKubelet = &kops.KubeletConfigSpec{}
-	}
-	if cluster.Spec.MasterKubelet == nil {
-		cluster.Spec.MasterKubelet = &kops.KubeletConfigSpec{}
-	}
-	cluster.Spec.Kubelet.HostnameOverride = "example-hostname"
-
-	nodeUpModelContext.IsMaster = true
-
-	nodeUpModelContext.NodeupConfig = &nodeup.Config{}
-
-	// These trigger use of etcd-manager
-	nodeUpModelContext.NodeupConfig.EtcdManifests = []string{
-		"memfs://clusters.example.com/minimal.example.com/manifests/etcd/main.yaml",
-		"memfs://clusters.example.com/minimal.example.com/manifests/etcd/events.yaml",
-	}
-
-	nodeUpModelContext.NodeupConfig.ProtokubeImage = &nodeup.Image{}
-	nodeUpModelContext.NodeupConfig.ProtokubeImage.Name = "protokube:test"
-
-	builder := &ProtokubeBuilder{NodeupModelContext: nodeUpModelContext}
-
-	if task, err := builder.buildSystemdService(); err != nil {
-		t.Fatalf("error from buildSystemdService: %v", err)
-	} else {
-		context.AddTask(task)
-	}
-
-	testutils.ValidateTasks(t, basedir, context)
+func populateAssets(ctx *NodeupModelContext) {
+	ctx.Assets = fi.NewAssetStore("")
+	ctx.Assets.AddForTest("protokube", "/opt/kops/bin/protokube", "testing protokube content")
+	ctx.Assets.AddForTest("channels", "/opt/kops/bin/channels", "testing channels content")
 }

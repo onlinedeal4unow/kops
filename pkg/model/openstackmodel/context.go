@@ -19,8 +19,7 @@ package openstackmodel
 import (
 	"fmt"
 
-	openstackutil "k8s.io/cloud-provider-openstack/pkg/util/openstack"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/model"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
@@ -29,17 +28,32 @@ import (
 
 type OpenstackModelContext struct {
 	*model.KopsModelContext
+	cloud openstack.OpenstackCloud
+}
+
+func (c *OpenstackModelContext) createCloud() (openstack.OpenstackCloud, error) {
+	if c.cloud == nil {
+		tags := make(map[string]string)
+		tags[openstack.TagClusterName] = c.ClusterName()
+		osCloud, err := openstack.NewOpenstackCloud(tags, &c.Cluster.Spec, "openstackmodel")
+		if err != nil {
+			return nil, err
+		}
+		c.cloud = osCloud
+	}
+	return c.cloud, nil
 }
 
 func (c *OpenstackModelContext) UseVIPACL() bool {
-	tags := make(map[string]string)
-	tags[openstack.TagClusterName] = c.ClusterName()
-	osCloud, err := openstack.NewOpenstackCloud(tags, &c.Cluster.Spec)
+	osCloud, err := c.createCloud()
 	if err != nil {
-		klog.Errorf("Failed with error %v", err)
 		return false
 	}
-	return openstackutil.IsOctaviaFeatureSupported(osCloud.LoadBalancerClient(), openstackutil.OctaviaFeatureVIPACL)
+	use, err := osCloud.UseLoadBalancerVIPACL()
+	if err != nil {
+		return false
+	}
+	return use
 }
 
 func (c *OpenstackModelContext) GetNetworkName() (string, error) {
@@ -47,11 +61,9 @@ func (c *OpenstackModelContext) GetNetworkName() (string, error) {
 		return c.ClusterName(), nil
 	}
 
-	tags := make(map[string]string)
-	tags[openstack.TagClusterName] = c.ClusterName()
-	osCloud, err := openstack.NewOpenstackCloud(tags, &c.Cluster.Spec)
+	osCloud, err := c.createCloud()
 	if err != nil {
-		return "", fmt.Errorf("error loading cloud: %v", err)
+		return "", err
 	}
 
 	network, err := osCloud.GetNetwork(c.Cluster.Spec.NetworkID)
@@ -79,11 +91,9 @@ func (c *OpenstackModelContext) findSubnetNameByID(subnetID string, subnetName s
 		return subnetName + "." + c.ClusterName(), nil
 	}
 
-	tags := make(map[string]string)
-	tags[openstack.TagClusterName] = c.ClusterName()
-	osCloud, err := openstack.NewOpenstackCloud(tags, &c.Cluster.Spec)
+	osCloud, err := c.createCloud()
 	if err != nil {
-		return "", fmt.Errorf("error loading cloud: %v", err)
+		return "", err
 	}
 
 	subnet, err := osCloud.GetSubnet(subnetID)

@@ -13,37 +13,23 @@ Create a resource:
   *  instancegroup
   *  secret
 
- Create a cluster, instancegroup or secret using command line parameters, YAML configuration specification files, or stdin. (Note: secrets cannot be created from YAML config files yet).
+ Create a cluster, instancegroup, keypair, or secret using command line parameters, YAML configuration specification files, or stdin. (Note: keypairs and secrets cannot be created from YAML config files yet).
 
 ```
-kops create -f FILENAME [flags]
+kops create {-f FILENAME}... [flags]
 ```
 
 ### Examples
 
 ```
-  # Create a cluster from the configuration specification in a YAML file
+  # Create a cluster from the configuration specification in a YAML file.
   kops create -f my-cluster.yaml
   
-  # Create secret from secret spec file
+  # Create secret from secret spec file.
   kops create -f secret.yaml
   
   # Create an instancegroup based on the YAML passed into stdin.
   cat instancegroup.yaml | kops create -f -
-  
-  # Create a cluster in AWS
-  kops create cluster --name=kubernetes-cluster.example.com \
-  --state=s3://kops-state-1234 --zones=eu-west-1a \
-  --node-count=2 --node-size=t2.micro --master-size=t2.micro \
-  --dns-zone=example.com
-  
-  # Create an instancegroup for the k8s-cluster.example.com cluster.
-  kops create ig --name=k8s-cluster.example.com node-example \
-  --role node --subnet my-subnet-name
-  
-  # Create a new ssh public key called admin.
-  kops create secret sshpublickey admin -i ~/.ssh/id_rsa.pub \
-  --name k8s-cluster.example.com --state s3://example.com
 ```
 
 ### Options
@@ -56,7 +42,7 @@ kops create -f FILENAME [flags]
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -65,6 +51,7 @@ kops create -f FILENAME [flags]
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -75,8 +62,10 @@ kops create -f FILENAME [flags]
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
 * [kops create cluster](kops_create_cluster.md)	 - Create a Kubernetes cluster.
 * [kops create instancegroup](kops_create_instancegroup.md)	 - Create an instancegroup.
+* [kops create keypair](kops_create_keypair.md)	 - Add a CA certificate and private key to a keyset.
 * [kops create secret](kops_create_secret.md)	 - Create a secret.
+* [kops create sshpublickey](kops_create_sshpublickey.md)	 - Create an SSH public key.
 

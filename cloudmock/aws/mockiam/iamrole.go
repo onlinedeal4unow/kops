@@ -23,7 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/aws/aws-sdk-go/service/iam"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 func (m *MockIAM) GetRole(request *iam.GetRoleInput) (*iam.GetRoleOutput, error) {
@@ -32,7 +32,7 @@ func (m *MockIAM) GetRole(request *iam.GetRoleInput) (*iam.GetRoleOutput, error)
 
 	role := m.Roles[aws.StringValue(request.RoleName)]
 	if role == nil {
-		return nil, awserr.New("NoSuchEntity", "No such entity", nil)
+		return nil, awserr.New(iam.ErrCodeNoSuchEntityException, "No such entity", nil)
 	}
 	response := &iam.GetRoleOutput{
 		Role: role,
@@ -59,8 +59,12 @@ func (m *MockIAM) CreateRole(request *iam.CreateRoleInput) (*iam.CreateRoleOutpu
 		AssumeRolePolicyDocument: request.AssumeRolePolicyDocument,
 		Description:              request.Description,
 		Path:                     request.Path,
-		RoleName:                 request.RoleName,
-		RoleId:                   &roleID,
+		PermissionsBoundary: &iam.AttachedPermissionsBoundary{
+			PermissionsBoundaryArn: request.PermissionsBoundary,
+		},
+		RoleName: request.RoleName,
+		RoleId:   &roleID,
+		Tags:     request.Tags,
 	}
 
 	if m.Roles == nil {
@@ -75,6 +79,7 @@ func (m *MockIAM) CreateRole(request *iam.CreateRoleInput) (*iam.CreateRoleOutpu
 func (m *MockIAM) CreateRoleWithContext(aws.Context, *iam.CreateRoleInput, ...request.Option) (*iam.CreateRoleOutput, error) {
 	panic("Not implemented")
 }
+
 func (m *MockIAM) CreateRoleRequest(*iam.CreateRoleInput) (*request.Request, *iam.CreateRoleOutput) {
 	panic("Not implemented")
 }
@@ -106,6 +111,7 @@ func (m *MockIAM) ListRoles(request *iam.ListRolesInput) (*iam.ListRolesOutput, 
 func (m *MockIAM) ListRolesWithContext(aws.Context, *iam.ListRolesInput, ...request.Option) (*iam.ListRolesOutput, error) {
 	panic("Not implemented")
 }
+
 func (m *MockIAM) ListRolesRequest(*iam.ListRolesInput) (*request.Request, *iam.ListRolesOutput) {
 	panic("Not implemented")
 }

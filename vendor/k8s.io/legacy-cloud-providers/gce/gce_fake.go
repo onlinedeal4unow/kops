@@ -1,3 +1,4 @@
+//go:build !providerless
 // +build !providerless
 
 /*
@@ -35,6 +36,7 @@ type TestClusterValues struct {
 	SecondaryZoneName string
 	ClusterID         string
 	ClusterName       string
+	OnXPN             bool
 }
 
 // DefaultTestClusterValues Creates a reasonable set of default cluster values
@@ -74,8 +76,16 @@ func NewFakeGCECloud(vals TestClusterValues) *Cloud {
 		projectID:        vals.ProjectID,
 		networkProjectID: vals.ProjectID,
 		ClusterID:        fakeClusterID(vals.ClusterID),
+		onXPN:            vals.OnXPN,
+		metricsCollector: newLoadBalancerMetrics(),
+		projectsBasePath: getProjectsBasePath(service.BasePath),
 	}
 	c := cloud.NewMockGCE(&gceProjectRouter{gce})
 	gce.c = c
 	return gce
+}
+
+// UpdateFakeGCECloud updates the fake GCE cloud with the specified values. Currently only the onXPN value is updated.
+func UpdateFakeGCECloud(g *Cloud, vals TestClusterValues) {
+	g.onXPN = vals.OnXPN
 }

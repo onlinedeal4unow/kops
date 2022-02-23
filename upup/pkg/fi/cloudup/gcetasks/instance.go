@@ -21,26 +21,27 @@ import (
 	"reflect"
 	"strings"
 
-	compute "google.golang.org/api/compute/v0.beta"
-	"k8s.io/klog"
+	compute "google.golang.org/api/compute/v1"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/terraform"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 var scopeAliases map[string]string
 
-//go:generate fitask -type=Instance
+// +kops:fitask
 type Instance struct {
 	Name      *string
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 
 	Network        *Network
 	Tags           []string
 	Preemptible    *bool
 	Image          *string
 	Disks          map[string]*Disk
-	ServiceAccount *string
+	ServiceAccount *ServiceAccount
 
 	CanIPForward *bool
 	IPAddress    *Address
@@ -64,7 +65,7 @@ func (e *Instance) CompareWithID() *string {
 func (e *Instance) Find(c *fi.Context) (*Instance, error) {
 	cloud := c.Cloud.(gce.GCECloud)
 
-	r, err := cloud.Compute().Instances.Get(cloud.Project(), *e.Zone, *e.Name).Do()
+	r, err := cloud.Compute().Instances().Get(cloud.Project(), *e.Zone, *e.Name)
 	if err != nil {
 		if gce.IsNotFound(err) {
 			return nil, nil
@@ -88,11 +89,11 @@ func (e *Instance) Find(c *fi.Context) (*Instance, error) {
 		if len(ni.AccessConfigs) != 0 {
 			ac := ni.AccessConfigs[0]
 			if ac.NatIP != "" {
-				addr, err := cloud.Compute().Addresses.List(cloud.Project(), cloud.Region()).Filter("address eq " + ac.NatIP).Do()
+				addrs, err := cloud.Compute().Addresses().ListWithFilter(cloud.Project(), cloud.Region(), "address eq "+ac.NatIP)
 				if err != nil {
 					return nil, fmt.Errorf("error querying for address %q: %v", ac.NatIP, err)
-				} else if len(addr.Items) != 0 {
-					actual.IPAddress = &Address{Name: &addr.Items[0].Name}
+				} else if len(addrs) != 0 {
+					actual.IPAddress = &Address{Name: &addrs[0].Name}
 				} else {
 					return nil, fmt.Errorf("address not found %q: %v", ac.NatIP, err)
 				}
@@ -113,7 +114,7 @@ func (e *Instance) Find(c *fi.Context) (*Instance, error) {
 
 			// TODO: Parse source URL instead of assuming same project/zone?
 			name := lastComponent(source)
-			d, err := cloud.Compute().Disks.Get(cloud.Project(), *e.Zone, name).Do()
+			d, err := cloud.Compute().Disks().Get(cloud.Project(), *e.Zone, name)
 			if err != nil {
 				if gce.IsNotFound(err) {
 					return nil, fmt.Errorf("disk not found %q: %v", source, err)
@@ -262,7 +263,7 @@ func (e *Instance) mapToGCE(project string, ipAddressResolver func(*Address) (*s
 				scopes = append(scopes, s)
 			}
 			serviceAccounts = append(serviceAccounts, &compute.ServiceAccount{
-				Email:  fi.StringValue(e.ServiceAccount),
+				Email:  fi.StringValue(e.ServiceAccount.Email),
 				Scopes: scopes,
 			})
 		}
@@ -326,8 +327,7 @@ func (_ *Instance) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Instance) error
 
 	if a == nil {
 		klog.V(2).Infof("Creating instance %q", i.Name)
-		_, err := cloud.Compute().Instances.Insert(project, zone, i).Do()
-		if err != nil {
+		if _, err := cloud.Compute().Instances().Insert(project, zone, i); err != nil {
 			return fmt.Errorf("error creating Instance: %v", err)
 		}
 	} else {
@@ -336,7 +336,7 @@ func (_ *Instance) RenderGCE(t *gce.GCEAPITarget, a, e, changes *Instance) error
 
 			i.Metadata.Fingerprint = a.metadataFingerprint
 
-			op, err := cloud.Compute().Instances.SetMetadata(project, zone, i.Name, i.Metadata).Do()
+			op, err := cloud.Compute().Instances().SetMetadata(project, zone, i.Name, i.Metadata)
 			if err != nil {
 				return fmt.Errorf("error setting metadata on instance: %v", err)
 			}
@@ -394,29 +394,29 @@ func ShortenImageURL(defaultProject string, imageURL string) (string, error) {
 }
 
 type terraformInstance struct {
-	Name                  string                           `json:"name" cty:"name"`
-	CanIPForward          bool                             `json:"can_ip_forward" cty:"can_ip_forward"`
-	MachineType           string                           `json:"machine_type,omitempty" cty:"machine_type"`
-	ServiceAccount        *terraformServiceAccount         `json:"service_account,omitempty" cty:"service_account"`
-	Scheduling            *terraformScheduling             `json:"scheduling,omitempty" cty:"scheduling"`
-	Disks                 []*terraformInstanceAttachedDisk `json:"disk,omitempty" cty:"disk"`
-	NetworkInterfaces     []*terraformNetworkInterface     `json:"network_interface,omitempty" cty:"network_interface"`
-	Metadata              map[string]*terraform.Literal    `json:"metadata,omitempty" cty:"metadata"`
-	MetadataStartupScript *terraform.Literal               `json:"metadata_startup_script,omitempty" cty:"metadata_startup_script"`
-	Tags                  []string                         `json:"tags,omitempty" cty:"tags"`
-	Zone                  string                           `json:"zone,omitempty" cty:"zone"`
+	Name                  string                              `cty:"name"`
+	CanIPForward          bool                                `cty:"can_ip_forward"`
+	MachineType           string                              `cty:"machine_type"`
+	ServiceAccounts       []*terraformTemplateServiceAccount  `cty:"service_account"`
+	Scheduling            *terraformScheduling                `cty:"scheduling"`
+	Disks                 []*terraformInstanceAttachedDisk    `cty:"disk"`
+	NetworkInterfaces     []*terraformNetworkInterface        `cty:"network_interface"`
+	Metadata              map[string]*terraformWriter.Literal `cty:"metadata"`
+	MetadataStartupScript *terraformWriter.Literal            `cty:"metadata_startup_script"`
+	Tags                  []string                            `cty:"tags"`
+	Zone                  string                              `cty:"zone"`
 }
 
 type terraformInstanceAttachedDisk struct {
-	AutoDelete bool   `json:"auto_delete,omitempty" cty:"auto_delete"`
-	DeviceName string `json:"device_name,omitempty" cty:"device_name"`
+	AutoDelete bool   `cty:"auto_delete"`
+	DeviceName string `cty:"device_name"`
 
 	// 'pd-standard', 'pd-ssd', 'local-ssd' etc
-	Type    string `json:"type,omitempty" cty:"type"`
-	Disk    string `json:"disk,omitempty" cty:"disk"`
-	Image   string `json:"image,omitempty" cty:"image"`
-	Scratch bool   `json:"scratch,omitempty" cty:"scratch"`
-	Size    int64  `json:"size,omitempty" cty:"size"`
+	Type    string `cty:"type"`
+	Disk    string `cty:"disk"`
+	Image   string `cty:"image"`
+	Scratch bool   `cty:"scratch"`
+	Size    int64  `cty:"size"`
 }
 
 func (_ *Instance) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *Instance) error {
@@ -446,7 +446,7 @@ func (_ *Instance) RenderTerraform(t *terraform.TerraformTarget, a, e, changes *
 		tf.Zone = *e.Zone
 	}
 
-	tf.ServiceAccount = addServiceAccounts(i.ServiceAccounts)
+	tf.ServiceAccounts = mapServiceAccountsToTerraform([]*ServiceAccount{e.ServiceAccount}, e.Scopes)
 
 	for _, d := range i.Disks {
 		tfd := &terraformInstanceAttachedDisk{

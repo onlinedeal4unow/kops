@@ -15,18 +15,17 @@
 
 . "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-cd "${KOPS_ROOT}"
+cd "${KOPS_ROOT}/hack" || exit 1
+go build -o "${TOOLS_BIN}/gazelle" github.com/bazelbuild/bazel-gazelle/cmd/gazelle
+cd "${KOPS_ROOT}" || exit 1
 
-TMP_OUT=$(mktemp -d)
-trap "{ rm -rf ${TMP_OUT}; }" EXIT
-
-GOBIN="${TMP_OUT}" go install ./vendor/github.com/bazelbuild/bazel-gazelle/cmd/gazelle
-
-gazelle_diff=$("${TMP_OUT}/gazelle" fix \
+gazelle_diff=$("${TOOLS_BIN}/gazelle" fix \
   -external=vendored \
+  -exclude=tests/e2e \
+  -exclude=hack \
   -mode=diff \
   -proto=disable \
-  -repo_root="${KOPS_ROOT}")
+  -repo_root="${KOPS_ROOT}") || _=$?
 
 if [[ -n "${gazelle_diff}" ]]; then
   echo "${gazelle_diff}" >&2

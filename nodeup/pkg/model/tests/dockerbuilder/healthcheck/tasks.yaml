@@ -2,7 +2,7 @@ file: /usr/bin/docker-runc
 mode: +i
 ---
 contents: |-
-  DOCKER_OPTS=
+  DOCKER_OPTS=--ip-masq=false --iptables=false --log-driver=json-file --log-level=info --log-opt=max-file=5 --log-opt=max-size=10m --storage-driver=overlay2,overlay,aufs
   DOCKER_NOFILE=1000000
 path: /etc/sysconfig/docker
 type: file
@@ -73,6 +73,70 @@ contents: |
   echo "docker still failing"
 mode: "0755"
 path: /opt/kops/bin/docker-healthcheck
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker
+    Key: docker
+mode: "0755"
+path: /usr/bin/docker
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-containerd
+    Key: docker-containerd
+mode: "0755"
+path: /usr/bin/docker-containerd
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-containerd-ctr
+    Key: docker-containerd-ctr
+mode: "0755"
+path: /usr/bin/docker-containerd-ctr
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-containerd-shim
+    Key: docker-containerd-shim
+mode: "0755"
+path: /usr/bin/docker-containerd-shim
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-init
+    Key: docker-init
+mode: "0755"
+path: /usr/bin/docker-init
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-proxy
+    Key: docker-proxy
+mode: "0755"
+path: /usr/bin/docker-proxy
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/docker-runc
+    Key: docker-runc
+mode: "0755"
+path: /usr/bin/docker-runc
+type: file
+---
+contents:
+  Asset:
+    AssetPath: docker/dockerd
+    Key: dockerd
+mode: "0755"
+path: /usr/bin/dockerd
 type: file
 ---
 contents: |2
@@ -271,11 +335,9 @@ contents: |2
 path: /usr/share/doc/docker/apache.txt
 type: file
 ---
-Name: docker-ce
-hash: 4dcee1a05ec592e8a76e53e5b464ea43085a2849
-preventStart: true
-source: http://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_17.03.2~ce-0~ubuntu-xenial_amd64.deb
-version: 17.03.2~ce-0~ubuntu-xenial
+GID: null
+Name: docker
+System: true
 ---
 Name: docker-healthcheck.service
 definition: |
@@ -316,27 +378,50 @@ definition: |
   [Unit]
   Description=Docker Application Container Engine
   Documentation=https://docs.docker.com
-  After=network.target docker.socket
+  After=network-online.target firewalld.service
+  Wants=network-online.target
   Requires=docker.socket
 
   [Service]
-  Type=notify
   EnvironmentFile=/etc/sysconfig/docker
   EnvironmentFile=/etc/environment
+  Type=notify
   ExecStart=/usr/bin/dockerd -H fd:// "$DOCKER_OPTS"
   ExecReload=/bin/kill -s HUP $MAINPID
-  KillMode=process
-  TimeoutStartSec=0
-  LimitNOFILE=1048576
-  LimitNPROC=1048576
-  LimitCORE=infinity
+  TimeoutSec=0
+  RestartSec=2
   Restart=always
-  RestartSec=2s
-  StartLimitInterval=0
+  StartLimitBurst=3
+  StartLimitInterval=60s
+  LimitNOFILE=infinity
+  LimitNPROC=infinity
+  LimitCORE=infinity
+  TasksMax=infinity
   Delegate=yes
+  KillMode=process
+  OOMScoreAdjust=-500
 
   [Install]
   WantedBy=multi-user.target
+enabled: true
+manageState: true
+running: true
+smartRestart: true
+---
+Name: docker.socket
+definition: |
+  [Unit]
+  Description=Docker Socket for the API
+  PartOf=docker.service
+
+  [Socket]
+  ListenStream=/var/run/docker.sock
+  SocketMode=0660
+  SocketUser=root
+  SocketGroup=docker
+
+  [Install]
+  WantedBy=sockets.target
 enabled: true
 manageState: true
 running: true

@@ -17,7 +17,7 @@ limitations under the License.
 package assets
 
 import (
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -28,8 +28,8 @@ import (
 
 func buildAssetBuilder(t *testing.T) *AssetBuilder {
 	builder := &AssetBuilder{
-		AssetsLocation:  &kops.Assets{},
-		ContainerAssets: []*ContainerAsset{},
+		AssetsLocation: &kops.Assets{},
+		ImageAssets:    []*ImageAsset{},
 	}
 	return builder
 }
@@ -136,13 +136,13 @@ func TestValidate_RemapImage_ContainerProxy_AppliesToImagesWithTags(t *testing.T
 func TestValidate_RemapImage_ContainerRegistry_MappingMultipleTimesConverges(t *testing.T) {
 	builder := buildAssetBuilder(t)
 
-	mirrorUrl := "proxy.example.com"
+	mirrorURL := "proxy.example.com"
 	image := "kube-apiserver:1.2.3"
 	expected := "proxy.example.com/kube-apiserver:1.2.3"
 	version, _ := util.ParseKubernetesVersion("1.10")
 
 	builder.KubernetesVersion = *version
-	builder.AssetsLocation.ContainerRegistry = &mirrorUrl
+	builder.AssetsLocation.ContainerRegistry = &mirrorURL
 
 	remapped := image
 	iterations := make([]map[int]int, 2)
@@ -156,7 +156,6 @@ func TestValidate_RemapImage_ContainerRegistry_MappingMultipleTimesConverges(t *
 			t.Errorf("Error remapping image (Expecting: %s, got %s, iteration: %d)", expected, remapped, i)
 		}
 	}
-
 }
 
 func TestRemapEmptySection(t *testing.T) {
@@ -169,7 +168,7 @@ func TestRemapEmptySection(t *testing.T) {
 	inputPath := filepath.Join(testdir, key+".input.yaml")
 	expectedPath := filepath.Join(testdir, key+".expected.yaml")
 
-	input, err := ioutil.ReadFile(inputPath)
+	input, err := os.ReadFile(inputPath)
 	if err != nil {
 		t.Errorf("error reading file %q: %v", inputPath, err)
 	}

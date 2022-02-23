@@ -5,100 +5,65 @@ metadata:
 spec:
   addons:
   - id: k8s-1.16
-    kubernetesVersion: '>=1.16.0-alpha.0'
     manifest: kops-controller.addons.k8s.io/k8s-1.16.yaml
-    manifestHash: 9c35881670887d269f0eac0fa1f0c20509e6a8bb
+    manifestHash: 775bbe55c21e48e24bf2ed86b80f5be033072025d5256d3b71858a29eb5384cb
     name: kops-controller.addons.k8s.io
+    needsRollingUpdate: control-plane
     selector:
       k8s-addon: kops-controller.addons.k8s.io
-    version: 1.18.0-alpha.2
+    version: 9.99.0
   - manifest: core.addons.k8s.io/v1.4.0.yaml
-    manifestHash: 3ffe9ac576f9eec72e2bdfbd2ea17d56d9b17b90
+    manifestHash: 18233793a8442224d052e44891e737c67ccfb4e051e95216392319653f4cb0e5
     name: core.addons.k8s.io
     selector:
       k8s-addon: core.addons.k8s.io
-    version: 1.4.0
-  - id: k8s-1.6
-    kubernetesVersion: <1.12.0
-    manifest: kube-dns.addons.k8s.io/k8s-1.6.yaml
-    manifestHash: 555f952a8b955ce7a5dd0bcd06a5be9e72bd2895
-    name: kube-dns.addons.k8s.io
-    selector:
-      k8s-addon: kube-dns.addons.k8s.io
-    version: 1.14.13-kops.2
+    version: 9.99.0
   - id: k8s-1.12
-    kubernetesVersion: '>=1.12.0'
-    manifest: kube-dns.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: 15ade04df128488a534141bd5b8593d078f4953f
-    name: kube-dns.addons.k8s.io
+    manifest: coredns.addons.k8s.io/k8s-1.12.yaml
+    manifestHash: 35f80340361377395a2c65b3b268048038cdce0adc90a3ce3afdbf63e72cffe0
+    name: coredns.addons.k8s.io
     selector:
-      k8s-addon: kube-dns.addons.k8s.io
-    version: 1.14.13-kops.2
-  - id: k8s-1.8
-    manifest: rbac.addons.k8s.io/k8s-1.8.yaml
-    manifestHash: 5d53ce7b920cd1e8d65d2306d80a041420711914
-    name: rbac.addons.k8s.io
-    selector:
-      k8s-addon: rbac.addons.k8s.io
-    version: 1.8.0
+      k8s-addon: coredns.addons.k8s.io
+    version: 9.99.0
   - id: k8s-1.9
     manifest: kubelet-api.rbac.addons.k8s.io/k8s-1.9.yaml
-    manifestHash: e1508d77cb4e527d7a2939babe36dc350dd83745
+    manifestHash: 01c120e887bd98d82ef57983ad58a0b22bc85efb48108092a24c4b82e4c9ea81
     name: kubelet-api.rbac.addons.k8s.io
     selector:
       k8s-addon: kubelet-api.rbac.addons.k8s.io
-    version: v0.0.1
+    version: 9.99.0
   - manifest: limit-range.addons.k8s.io/v1.5.0.yaml
-    manifestHash: 2ea50e23f1a5aa41df3724630ac25173738cc90c
+    manifestHash: 2d55c3bc5e354e84a3730a65b42f39aba630a59dc8d32b30859fcce3d3178bc2
     name: limit-range.addons.k8s.io
     selector:
       k8s-addon: limit-range.addons.k8s.io
-    version: 1.5.0
-  - id: k8s-1.6
-    kubernetesVersion: <1.12.0
-    manifest: dns-controller.addons.k8s.io/k8s-1.6.yaml
-    manifestHash: 8fe461c2c25819f45f4a49aaa9eabc0118df9ecd
-    name: dns-controller.addons.k8s.io
-    selector:
-      k8s-addon: dns-controller.addons.k8s.io
-    version: 1.18.0-alpha.2
+    version: 9.99.0
   - id: k8s-1.12
-    kubernetesVersion: '>=1.12.0'
     manifest: dns-controller.addons.k8s.io/k8s-1.12.yaml
-    manifestHash: fb4ca0b799e7abed37996848a889513f586a1539
+    manifestHash: ac3d2238b9a073b6d2e28d1668aabb35704ad01e96d586147006e074c8efb0f8
     name: dns-controller.addons.k8s.io
     selector:
       k8s-addon: dns-controller.addons.k8s.io
-    version: 1.18.0-alpha.2
+    version: 9.99.0
   - id: v1.15.0
-    kubernetesVersion: '>=1.15.0'
     manifest: storage-aws.addons.k8s.io/v1.15.0.yaml
-    manifestHash: 5e829e8981470696bef2ed5e96839ea83cb36d24
+    manifestHash: 4e2cda50cd5048133aad1b5e28becb60f4629d3f9e09c514a2757c27998b4200
     name: storage-aws.addons.k8s.io
     selector:
       k8s-addon: storage-aws.addons.k8s.io
-    version: 1.15.0
-  - id: v1.7.0
-    kubernetesVersion: <1.15.0
-    manifest: storage-aws.addons.k8s.io/v1.7.0.yaml
-    manifestHash: 62705a596142e6cc283280e8aa973e51536994c5
-    name: storage-aws.addons.k8s.io
-    selector:
-      k8s-addon: storage-aws.addons.k8s.io
-    version: 1.15.0
-  - id: k8s-1.7
-    kubernetesVersion: <1.12.0
-    manifest: networking.cilium.io/k8s-1.7.yaml
-    manifestHash: e6670d455bcd03c5b85ccb6ff6bbe6e068aa7674
+    version: 9.99.0
+  - id: k8s-1.16
+    manifest: networking.cilium.io/k8s-1.16-v1.10.yaml
+    manifestHash: b98df037f3556a2b6e3233c01e9b07c7423b803e5ad1f92276ef8df6e52f9ce6
     name: networking.cilium.io
+    needsRollingUpdate: all
     selector:
       role.kubernetes.io/networking: "1"
-    version: 1.7.1-kops.1
-  - id: k8s-1.12
-    kubernetesVersion: '>=1.12.0'
-    manifest: networking.cilium.io/k8s-1.12.yaml
-    manifestHash: b9cc0e3b5e63d6aa283e2d1111a150680745abd2
-    name: networking.cilium.io
+    version: 9.99.0
+  - id: k8s-1.17
+    manifest: aws-ebs-csi-driver.addons.k8s.io/k8s-1.17.yaml
+    manifestHash: e992b49787250bd5b4ab9d2ca92f7540b6eb092cae0ab3d2fd02ccbf2782f519
+    name: aws-ebs-csi-driver.addons.k8s.io
     selector:
-      role.kubernetes.io/networking: "1"
-    version: 1.7.1-kops.1
+      k8s-addon: aws-ebs-csi-driver.addons.k8s.io
+    version: 9.99.0

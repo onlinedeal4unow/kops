@@ -31,14 +31,15 @@ func TestLaunchTemplateCloudformationRender(t *testing.T) {
 				IAMInstanceProfile: &IAMInstanceProfile{
 					Name: fi.String("nodes"),
 				},
-				ID:                     fi.String("test-11"),
-				InstanceMonitoring:     fi.Bool(true),
-				InstanceType:           fi.String("t2.medium"),
-				RootVolumeOptimization: fi.Bool(true),
-				RootVolumeIops:         fi.Int64(100),
-				RootVolumeSize:         fi.Int64(64),
-				SpotPrice:              "10",
-				SpotDurationInMinutes:  fi.Int64(120),
+				ID:                           fi.String("test-11"),
+				InstanceMonitoring:           fi.Bool(true),
+				InstanceType:                 fi.String("t2.medium"),
+				RootVolumeOptimization:       fi.Bool(true),
+				RootVolumeIops:               fi.Int64(100),
+				RootVolumeSize:               fi.Int64(64),
+				SpotPrice:                    fi.String("10"),
+				SpotDurationInMinutes:        fi.Int64(120),
+				InstanceInterruptionBehavior: fi.String("hibernate"),
 				SSHKey: &SSHKey{
 					Name: fi.String("mykey"),
 				},
@@ -46,7 +47,9 @@ func TestLaunchTemplateCloudformationRender(t *testing.T) {
 					{Name: fi.String("nodes-1"), ID: fi.String("1111")},
 					{Name: fi.String("nodes-2"), ID: fi.String("2222")},
 				},
-				Tenancy: fi.String("dedicated"),
+				Tenancy:                 fi.String("dedicated"),
+				HTTPTokens:              fi.String("required"),
+				HTTPPutResponseHopLimit: fi.Int64(1),
 			},
 			Expected: `{
   "Resources": {
@@ -67,8 +70,16 @@ func TestLaunchTemplateCloudformationRender(t *testing.T) {
             "MarketType": "spot",
             "SpotOptions": {
               "BlockDurationMinutes": 120,
+              "InstanceInterruptionBehavior": "hibernate",
               "MaxPrice": "10"
             }
+          },
+          "MetadataOptions": {
+            "HttpPutResponseHopLimit": 1,
+            "HttpTokens": "required"
+          },
+          "Monitoring": {
+            "Enabled": true
           },
           "NetworkInterfaces": [
             {
@@ -125,7 +136,9 @@ func TestLaunchTemplateCloudformationRender(t *testing.T) {
 					{Name: fi.String("nodes-1"), ID: fi.String("1111")},
 					{Name: fi.String("nodes-2"), ID: fi.String("2222")},
 				},
-				Tenancy: fi.String("dedicated"),
+				Tenancy:                 fi.String("dedicated"),
+				HTTPTokens:              fi.String("optional"),
+				HTTPPutResponseHopLimit: fi.Int64(1),
 			},
 			Expected: `{
   "Resources": {
@@ -153,6 +166,13 @@ func TestLaunchTemplateCloudformationRender(t *testing.T) {
           },
           "InstanceType": "t2.medium",
           "KeyName": "mykey",
+          "MetadataOptions": {
+            "HttpPutResponseHopLimit": 1,
+            "HttpTokens": "optional"
+          },
+          "Monitoring": {
+            "Enabled": true
+          },
           "NetworkInterfaces": [
             {
               "AssociatePublicIpAddress": true,

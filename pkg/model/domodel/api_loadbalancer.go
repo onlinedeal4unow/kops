@@ -17,22 +17,19 @@ limitations under the License.
 package domodel
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/dns"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/dotasks"
-	"k8s.io/kops/upup/pkg/fi/fitasks"
 )
 
 // APILoadBalancerModelBuilder builds a LoadBalancer for accessing the API
 type APILoadBalancerModelBuilder struct {
 	*DOModelContext
-	Lifecycle *fi.Lifecycle
+	Lifecycle fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &APILoadBalancerModelBuilder{}
@@ -58,7 +55,7 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		return fmt.Errorf("unhandled LoadBalancer type %q", lbSpec.Type)
 	}
 
-	clusterName := strings.Replace(b.ClusterName(), ".", "-", -1)
+	clusterName := do.SafeClusterName(b.ClusterName())
 	loadbalancerName := "api-" + clusterName
 	clusterMasterTag := do.TagKubernetesClusterMasterPrefix + ":" + clusterName
 
@@ -69,21 +66,23 @@ func (b *APILoadBalancerModelBuilder) Build(c *fi.ModelBuilderContext) error {
 		DropletTag: fi.String(clusterMasterTag),
 		Lifecycle:  b.Lifecycle,
 	}
+
+	if b.Cluster.Spec.NetworkID != "" {
+		loadbalancer.VPCUUID = fi.String(b.Cluster.Spec.NetworkID)
+	} else if b.Cluster.Spec.NetworkCIDR != "" {
+		vpcName := "vpc-" + clusterName
+		loadbalancer.VPCName = fi.String(vpcName)
+		loadbalancer.NetworkCIDR = fi.String(b.Cluster.Spec.NetworkCIDR)
+	}
+
 	c.AddTask(loadbalancer)
 
 	// Temporarily do not know the role of the following function
 	if dns.IsGossipHostname(b.Cluster.Name) || b.UsePrivateDNS() {
 		// Ensure the LB hostname is included in the TLS certificate,
 		// if we're not going to use an alias for it
-		// TODO: I don't love this technique for finding the task by name & modifying it
-		masterKeypairTask, found := c.Tasks["Keypair/master"]
-		if !found {
-			return errors.New("keypair/master task not found")
-		}
-		masterKeypair := masterKeypairTask.(*fitasks.Keypair)
-		masterKeypair.AlternateNameTasks = append(masterKeypair.AlternateNameTasks, loadbalancer)
+		loadbalancer.ForAPIServer = true
 	}
 
 	return nil
-
 }

@@ -32,6 +32,8 @@ type cloudformationLaunchTemplateNetworkInterface struct {
 	DeleteOnTermination *bool `json:"DeleteOnTermination,omitempty"`
 	// DeviceIndex is the device index for the network interface attachment.
 	DeviceIndex *int `json:"DeviceIndex,omitempty"`
+	// Ipv6AddressCount is the number of IPv6 addresses to assign with the primary network interface.
+	Ipv6AddressCount *int64 `json:"Ipv6AddressCount,omitempty"`
 	// SecurityGroups is a list of security group ids.
 	SecurityGroups []*cloudformation.Literal `json:"Groups,omitempty"`
 }
@@ -64,8 +66,8 @@ type cloudformationLaunchTemplateIAMProfile struct {
 type cloudformationLaunchTemplateMarketOptionsSpotOptions struct {
 	// BlockDurationMinutes is required duration in minutes. This value must be a multiple of 60.
 	BlockDurationMinutes *int64 `json:"BlockDurationMinutes,omitempty"`
-	// InstancesInterruptionBehavior is the behavior when a Spot Instance is interrupted. Can be hibernate, stop, or terminate
-	InstancesInterruptionBehavior *string `json:"InstancesInterruptionBehavior,omitempty"`
+	// InstanceInterruptionBehavior is the behavior when a Spot Instance is interrupted. Can be hibernate, stop, or terminate
+	InstanceInterruptionBehavior *string `json:"InstanceInterruptionBehavior,omitempty"`
 	// MaxPrice is the maximum hourly price you're willing to pay for the Spot Instances
 	MaxPrice *string `json:"MaxPrice,omitempty"`
 	// SpotInstanceType is the Spot Instance request type. Can be one-time, or persistent
@@ -79,6 +81,11 @@ type cloudformationLaunchTemplateMarketOptions struct {
 	SpotOptions *cloudformationLaunchTemplateMarketOptionsSpotOptions `json:"SpotOptions,omitempty"`
 }
 
+type cloudformationLaunchTemplateCreditSpecification struct {
+	// CPUCredits The credit option for CPU usage on some instance types
+	CPUCredits *string `json:"CpuCredits,omitempty"`
+}
+
 type cloudformationLaunchTemplateBlockDeviceEBS struct {
 	// VolumeType is the ebs type to use
 	VolumeType *string `json:"VolumeType,omitempty"`
@@ -86,10 +93,14 @@ type cloudformationLaunchTemplateBlockDeviceEBS struct {
 	VolumeSize *int64 `json:"VolumeSize,omitempty"`
 	// IOPS is the provisioned iops
 	IOPS *int64 `json:"Iops,omitempty"`
+	// Throughput is the gp3 volume throughput
+	Throughput *int64 `json:"Throughput,omitempty"`
 	// DeleteOnTermination indicates the volume should die with the instance
 	DeleteOnTermination *bool `json:"DeleteOnTermination,omitempty"`
 	// Encrypted indicates the device is encrypted
 	Encrypted *bool `json:"Encrypted,omitempty"`
+	// KmsKeyID is the encryption key identifier for the volume
+	KmsKeyID *string `json:"KmsKeyId,omitempty"`
 }
 
 type cloudformationLaunchTemplateBlockDevice struct {
@@ -108,9 +119,18 @@ type cloudformationLaunchTemplateTagSpecification struct {
 	Tags []cloudformationTag `json:"Tags,omitempty"`
 }
 
+type cloudformationLaunchTemplateInstanceMetadataOptions struct {
+	// HTTPPutResponseHopLimit is the desired HTTP PUT response hop limit for instance metadata requests.
+	HTTPPutResponseHopLimit *int64 `json:"HttpPutResponseHopLimit,omitempty"`
+	// HTTPTokens is the state of token usage for your instance metadata requests.
+	HTTPTokens *string `json:"HttpTokens,omitempty"`
+}
+
 type cloudformationLaunchTemplateData struct {
 	// BlockDeviceMappings is the device mappings
 	BlockDeviceMappings []*cloudformationLaunchTemplateBlockDevice `json:"BlockDeviceMappings,omitempty"`
+	// CreditSpecification is the credit option for CPU Usage on some instance types
+	CreditSpecification *cloudformationLaunchTemplateCreditSpecification `json:"CreditSpecification,omitempty"`
 	// EBSOptimized indicates if the root device is ebs optimized
 	EBSOptimized *bool `json:"EbsOptimized,omitempty"`
 	// IAMInstanceProfile is the IAM profile to assign to the nodes
@@ -123,6 +143,8 @@ type cloudformationLaunchTemplateData struct {
 	KeyName *string `json:"KeyName,omitempty"`
 	// MarketOptions are the spot pricing options
 	MarketOptions *cloudformationLaunchTemplateMarketOptions `json:"InstanceMarketOptions,omitempty"`
+	// MetadataOptions are the instance metadata options.
+	MetadataOptions *cloudformationLaunchTemplateInstanceMetadataOptions `json:"MetadataOptions,omitempty"`
 	// Monitoring are the instance monitoring options
 	Monitoring *cloudformationLaunchTemplateMonitoring `json:"Monitoring,omitempty"`
 	// NetworkInterfaces are the networking options
@@ -171,21 +193,35 @@ func (t *LaunchTemplate) RenderCloudformation(target *cloudformation.Cloudformat
 		EBSOptimized: e.RootVolumeOptimization,
 		ImageID:      image,
 		InstanceType: e.InstanceType,
+		MetadataOptions: &cloudformationLaunchTemplateInstanceMetadataOptions{
+			HTTPTokens:              e.HTTPTokens,
+			HTTPPutResponseHopLimit: e.HTTPPutResponseHopLimit,
+		},
 		NetworkInterfaces: []*cloudformationLaunchTemplateNetworkInterface{
 			{
 				AssociatePublicIPAddress: e.AssociatePublicIP,
 				DeleteOnTermination:      fi.Bool(true),
 				DeviceIndex:              fi.Int(0),
+				Ipv6AddressCount:         e.IPv6AddressCount,
 			},
 		},
 	}
 
-	if e.SpotPrice != "" {
-		marketSpotOptions := cloudformationLaunchTemplateMarketOptionsSpotOptions{MaxPrice: fi.String(e.SpotPrice)}
+	if fi.StringValue(e.SpotPrice) != "" {
+		marketSpotOptions := cloudformationLaunchTemplateMarketOptionsSpotOptions{MaxPrice: e.SpotPrice}
 		if e.SpotDurationInMinutes != nil {
 			marketSpotOptions.BlockDurationMinutes = e.SpotDurationInMinutes
 		}
+		if e.InstanceInterruptionBehavior != nil {
+			marketSpotOptions.InstanceInterruptionBehavior = e.InstanceInterruptionBehavior
+		}
 		launchTemplateData.MarketOptions = &cloudformationLaunchTemplateMarketOptions{MarketType: fi.String("spot"), SpotOptions: &marketSpotOptions}
+	}
+
+	if fi.StringValue(e.CPUCredits) != "" {
+		launchTemplateData.CreditSpecification = &cloudformationLaunchTemplateCreditSpecification{
+			CPUCredits: e.CPUCredits,
+		}
 	}
 
 	cf := &cloudformationLaunchTemplate{
@@ -203,13 +239,18 @@ func (t *LaunchTemplate) RenderCloudformation(target *cloudformation.Cloudformat
 	if e.Tenancy != nil {
 		data.Placement = []*cloudformationLaunchTemplatePlacement{{Tenancy: e.Tenancy}}
 	}
+	if e.InstanceMonitoring != nil {
+		data.Monitoring = &cloudformationLaunchTemplateMonitoring{
+			Enabled: e.InstanceMonitoring,
+		}
+	}
 	if e.IAMInstanceProfile != nil {
 		data.IAMInstanceProfile = &cloudformationLaunchTemplateIAMProfile{
 			Name: e.IAMInstanceProfile.CloudformationLink(),
 		}
 	}
 	if e.UserData != nil {
-		d, err := e.UserData.AsBytes()
+		d, err := fi.ResourceAsBytes(e.UserData)
 		if err != nil {
 			return err
 		}
@@ -229,8 +270,11 @@ func (t *LaunchTemplate) RenderCloudformation(target *cloudformation.Cloudformat
 			EBS: &cloudformationLaunchTemplateBlockDeviceEBS{
 				DeleteOnTermination: fi.Bool(true),
 				IOPS:                x.EbsVolumeIops,
+				Throughput:          x.EbsVolumeThroughput,
 				VolumeSize:          x.EbsVolumeSize,
 				VolumeType:          x.EbsVolumeType,
+				Encrypted:           x.EbsEncrypted,
+				KmsKeyID:            x.EbsKmsKey,
 			},
 		})
 	}
@@ -241,8 +285,10 @@ func (t *LaunchTemplate) RenderCloudformation(target *cloudformation.Cloudformat
 				DeleteOnTermination: fi.Bool(true),
 				IOPS:                x.EbsVolumeIops,
 				VolumeSize:          x.EbsVolumeSize,
+				Throughput:          x.EbsVolumeThroughput,
 				VolumeType:          x.EbsVolumeType,
 				Encrypted:           x.EbsEncrypted,
+				KmsKeyID:            x.EbsKmsKey,
 			},
 		})
 	}

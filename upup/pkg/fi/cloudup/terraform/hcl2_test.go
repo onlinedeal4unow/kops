@@ -24,6 +24,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/gocty"
 	"k8s.io/kops/pkg/diff"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
 )
 
 func TestWriteValue(t *testing.T) {
@@ -113,28 +114,28 @@ foo {
 func TestWriteLiteral(t *testing.T) {
 	cases := []struct {
 		name     string
-		literal  *Literal
+		literal  *terraformWriter.Literal
 		expected string
 	}{
 		{
 			name:     "string",
-			literal:  &Literal{Value: "value"},
+			literal:  terraformWriter.LiteralFromStringValue("value"),
 			expected: `foo = "value"`,
 		},
 		{
-			name: "traversal",
-			literal: &Literal{
-				ResourceType: "type",
-				ResourceName: "name",
-				ResourceProp: "prop",
-			},
+			name:     "traversal",
+			literal:  terraformWriter.LiteralProperty("type", "name", "prop"),
 			expected: "foo = type.name.prop",
 		},
 		{
-			name: "file",
-			literal: &Literal{
-				FilePath: "${path.module}/foo",
-			},
+			name:     "provider alias",
+			literal:  terraformWriter.LiteralTokens("aws", "files"),
+			expected: "foo = aws.files",
+		},
+
+		{
+			name:     "file",
+			literal:  terraformWriter.LiteralFunctionExpression("file", []string{"\"${path.module}/foo\""}),
 			expected: `foo = file("${path.module}/foo")`,
 		},
 	}
@@ -151,10 +152,11 @@ func TestWriteLiteral(t *testing.T) {
 		})
 	}
 }
+
 func TestWriteLiteralList(t *testing.T) {
 	cases := []struct {
 		name     string
-		literals []*Literal
+		literals []*terraformWriter.Literal
 		expected string
 	}{
 		{
@@ -163,38 +165,30 @@ func TestWriteLiteralList(t *testing.T) {
 		},
 		{
 			name: "one literal",
-			literals: []*Literal{
+			literals: []*terraformWriter.Literal{
 				{
-					ResourceType: "type",
-					ResourceName: "name",
-					ResourceProp: "prop",
+					Tokens: []string{"type", "name", "prop"},
 				},
 			},
 			expected: "foo = [type.name.prop]",
 		},
 		{
 			name: "two literals",
-			literals: []*Literal{
+			literals: []*terraformWriter.Literal{
 				{
-					ResourceType: "type1",
-					ResourceName: "name1",
-					ResourceProp: "prop1",
+					Tokens: []string{"type1", "name1", "prop1"},
 				},
 				{
-					ResourceType: "type2",
-					ResourceName: "name2",
-					ResourceProp: "prop2",
+					Tokens: []string{"type2", "name2", "prop2"},
 				},
 			},
 			expected: "foo = [type1.name1.prop1, type2.name2.prop2]",
 		},
 		{
 			name: "one traversal literal, one string literal",
-			literals: []*Literal{
+			literals: []*terraformWriter.Literal{
 				{
-					ResourceType: "type",
-					ResourceName: "name",
-					ResourceProp: "prop",
+					Tokens: []string{"type", "name", "prop"},
 				},
 				{
 					Value: "foobar",
@@ -218,6 +212,12 @@ func TestWriteLiteralList(t *testing.T) {
 }
 
 func TestWriteMap(t *testing.T) {
+	literalList := []*terraformWriter.Literal{
+		terraformWriter.LiteralTokens("aws", "files"),
+		terraformWriter.LiteralFromStringValue("foobar"),
+	}
+	literalListType, _ := gocty.ImpliedType(literalList)
+	literalListVal, _ := gocty.ToCtyValue(literalList, literalListType)
 	cases := []struct {
 		name     string
 		values   map[string]cty.Value
@@ -247,6 +247,16 @@ tags = {
   "key1.k8s.local/foo" = "value1"
 }`,
 		},
+		{
+			name: "literal list",
+			values: map[string]cty.Value{
+				"foo": literalListVal,
+			},
+			expected: `
+tags = {
+  "foo" = [aws.files, "foobar"]
+}`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,19 +277,21 @@ tags = {
 func TestWriteMapLiterals(t *testing.T) {
 	cases := []struct {
 		name     string
-		values   map[string]Literal
+		values   map[string]terraformWriter.Literal
 		expected string
 	}{
 		{
 			name: "literal values",
-			values: map[string]Literal{
-				"key1": {FilePath: "${module.path}/path/to/value1"},
-				"key2": {FilePath: "${module.path}/path/to/value2"},
+			values: map[string]terraformWriter.Literal{
+				"key1": *terraformWriter.LiteralFunctionExpression("file", []string{"\"${module.path}/path/to/value1\""}),
+				"key2": *terraformWriter.LiteralFunctionExpression("filebase64", []string{"\"${module.path}/path/to/value2\""}),
+				"key3": *terraformWriter.LiteralFunctionExpression("cidrsubnet", []string{"\"172.16.0.0/12\"", "4", "2"}),
 			},
 			expected: `
 metadata = {
   "key1" = file("${module.path}/path/to/value1")
-  "key2" = file("${module.path}/path/to/value2")
+  "key2" = filebase64("${module.path}/path/to/value2")
+  "key3" = cidrsubnet("172.16.0.0/12", 4, 2)
 }
 			`,
 		},
@@ -293,7 +305,6 @@ metadata = {
 					t.Errorf("unexpected error %v", err)
 				}
 				literalVal, err := gocty.ToCtyValue(v, literalType)
-
 				if err != nil {
 					t.Errorf("unexpected error %v", err)
 				}

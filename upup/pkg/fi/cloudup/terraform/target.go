@@ -18,111 +18,52 @@ package terraform
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
-	"strconv"
-	"strings"
-	"sync"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
+	"k8s.io/kops/upup/pkg/fi/cloudup/terraformWriter"
+	"k8s.io/kops/util/pkg/vfs"
 )
 
-// Version represents which terraform version is targeted
-type Version string
-
-// Version011 represents terraform versions before 0.12
-const Version011 Version = "0.11"
-
-// Version012 represents terraform versions 0.12 and above
-const Version012 Version = "0.12"
-
 type TerraformTarget struct {
+	terraformWriter.TerraformWriter
 	Cloud   fi.Cloud
-	Region  string
 	Project string
 
 	ClusterName string
-	Version     Version
 
 	outDir string
-
-	// mutex protects the following items (resources & files)
-	mutex sync.Mutex
-	// resources is a list of TF items that should be created
-	resources []*terraformResource
-	// outputs is a list of our TF output variables
-	outputs map[string]*terraformOutputVariable
-	// files is a map of TF resource files that should be created
-	files map[string][]byte
 	// extra config to add to the provider block
 	clusterSpecTarget *kops.TargetSpec
+	filesProvider     *vfs.TerraformProvider
 }
 
-func NewTerraformTarget(cloud fi.Cloud, region, project string, outDir string, version Version, clusterSpecTarget *kops.TargetSpec) *TerraformTarget {
-	return &TerraformTarget{
+func NewTerraformTarget(cloud fi.Cloud, project string, filesProvider *vfs.TerraformProvider, outDir string, clusterSpecTarget *kops.TargetSpec) *TerraformTarget {
+	target := TerraformTarget{
 		Cloud:   cloud,
-		Region:  region,
 		Project: project,
-		Version: version,
 
 		outDir:            outDir,
-		files:             make(map[string][]byte),
-		outputs:           make(map[string]*terraformOutputVariable),
 		clusterSpecTarget: clusterSpecTarget,
+		filesProvider:     filesProvider,
 	}
+	target.InitTerraformWriter()
+	return &target
 }
 
 var _ fi.Target = &TerraformTarget{}
 
-type terraformResource struct {
-	ResourceType string
-	ResourceName string
-	Item         interface{}
-}
-
-type byTypeAndName []*terraformResource
-
-func (a byTypeAndName) Len() int { return len(a) }
-func (a byTypeAndName) Less(i, j int) bool {
-	return a[i].ResourceType+a[i].ResourceName < a[j].ResourceType+a[j].ResourceName
-}
-func (a byTypeAndName) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-
-type terraformOutputVariable struct {
-	Key        string
-	Value      *Literal
-	ValueArray []*Literal
-}
-
-// A TF name can't have dots in it (if we want to refer to it from a literal),
-// so we replace them
-func tfSanitize(name string) string {
-	if _, err := strconv.Atoi(string(name[0])); err == nil {
-		panic(fmt.Sprintf("Terraform resource names cannot start with a digit. This is a bug in Kops, please report this in a GitHub Issue. Name: %v", name))
-	}
-	return strings.NewReplacer(".", "-", "/", "--", ":", "_").Replace(name)
-}
-
-func (t *TerraformTarget) AddFile(resourceType string, resourceName string, key string, r fi.Resource) (*Literal, error) {
-	id := resourceType + "_" + resourceName + "_" + key
-
+func (t *TerraformTarget) AddFileResource(resourceType string, resourceName string, key string, r fi.Resource, base64 bool) (*terraformWriter.Literal, error) {
 	d, err := fi.ResourceAsBytes(r)
 	if err != nil {
+		id := resourceType + "_" + resourceName + "_" + key
 		return nil, fmt.Errorf("error rending resource %s %v", id, err)
 	}
 
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-
-	p := path.Join("data", id)
-	t.files[p] = d
-
-	modulePath := path.Join("${path.module}", p)
-	l := LiteralFileExpression(modulePath)
-	return l, nil
+	return t.AddFileBytes(resourceType, resourceName, key, d, base64)
 }
 
 func (t *TerraformTarget) ProcessDeletions() bool {
@@ -130,90 +71,40 @@ func (t *TerraformTarget) ProcessDeletions() bool {
 	return false
 }
 
-func (t *TerraformTarget) RenderResource(resourceType string, resourceName string, e interface{}) error {
-	res := &terraformResource{
-		ResourceType: resourceType,
-		ResourceName: resourceName,
-		Item:         e,
-	}
-
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-
-	t.resources = append(t.resources, res)
-
-	return nil
-}
-
-func (t *TerraformTarget) AddOutputVariable(key string, literal *Literal) error {
-	v := &terraformOutputVariable{
-		Key:   key,
-		Value: literal,
-	}
-
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-
-	if t.outputs[key] != nil {
-		return fmt.Errorf("duplicate variable: %q", key)
-	}
-	t.outputs[key] = v
-
-	return nil
-}
-
-func (t *TerraformTarget) AddOutputVariableArray(key string, literal *Literal) error {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-
-	if t.outputs[key] == nil {
-		v := &terraformOutputVariable{
-			Key: key,
-		}
-		t.outputs[key] = v
-	}
-	if t.outputs[key].Value != nil {
-		return fmt.Errorf("variable %q is both an array and a scalar", key)
-	}
-
-	t.outputs[key].ValueArray = append(t.outputs[key].ValueArray, literal)
-
-	return nil
-}
-
 // tfGetProviderExtraConfig is a helper function to get extra config with safety checks on the pointers.
 func tfGetProviderExtraConfig(c *kops.TargetSpec) map[string]string {
 	if c != nil &&
 		c.Terraform != nil &&
-		c.Terraform.ProviderExtraConfig != nil {
+		c.Terraform.FilesProviderExtraConfig != nil {
 		return *c.Terraform.ProviderExtraConfig
 	}
 	return nil
 }
 
-func (t *TerraformTarget) Finish(taskMap map[string]fi.Task) error {
-	var err error
-	switch t.Version {
-	case Version011:
-		err = t.finish011(taskMap)
-	case Version012:
-		err = t.finish012(taskMap)
-	default:
-		err = fmt.Errorf("unrecognized terraform version %v", t.Version)
+// tfGetFilesProviderExtraConfig is a helper function to get extra config with safety checks on the pointers.
+func tfGetFilesProviderExtraConfig(c *kops.TargetSpec) map[string]string {
+	if c != nil &&
+		c.Terraform != nil &&
+		c.Terraform.FilesProviderExtraConfig != nil {
+		return *c.Terraform.FilesProviderExtraConfig
 	}
-	if err != nil {
+	return nil
+}
+
+func (t *TerraformTarget) Finish(taskMap map[string]fi.Task) error {
+	if err := t.finishHCL2(); err != nil {
 		return err
 	}
 
-	for relativePath, contents := range t.files {
+	for relativePath, contents := range t.Files {
 		p := path.Join(t.outDir, relativePath)
 
-		err = os.MkdirAll(path.Dir(p), os.FileMode(0755))
+		err := os.MkdirAll(path.Dir(p), os.FileMode(0o755))
 		if err != nil {
 			return fmt.Errorf("error creating output directory %q: %v", path.Dir(p), err)
 		}
 
-		err = ioutil.WriteFile(p, contents, os.FileMode(0644))
+		err = os.WriteFile(p, contents, os.FileMode(0o644))
 		if err != nil {
 			return fmt.Errorf("error writing terraform data to output file %q: %v", p, err)
 		}

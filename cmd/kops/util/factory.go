@@ -23,7 +23,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	gceacls "k8s.io/kops/pkg/acls/gce"
 	s3acls "k8s.io/kops/pkg/acls/s3"
 	kopsclient "k8s.io/kops/pkg/client/clientset_generated/clientset"
@@ -103,6 +103,8 @@ func (f *Factory) Clientset() (simple.Clientset, error) {
 				},
 				KopsClient: kopsClient.Kops(),
 			}
+		} else if strings.HasPrefix(registryPath, "vault://") {
+			return nil, field.Invalid(field.NewPath("State Store"), registryPath, "Vault is not supported as registry path")
 		} else {
 			basePath, err := vfs.Context.BuildVfsPath(registryPath)
 			if err != nil {
@@ -113,10 +115,7 @@ func (f *Factory) Clientset() (simple.Clientset, error) {
 				return nil, field.Invalid(field.NewPath("State Store"), registryPath, INVALID_STATE_ERROR)
 			}
 
-			// For kops CLI / controller, we do allow vfs list (unlike nodeup!)
-			allowVFSList := true
-
-			f.clientset = vfsclientset.NewVFSClientset(basePath, allowVFSList)
+			f.clientset = vfsclientset.NewVFSClientset(basePath)
 		}
 		if strings.HasPrefix(registryPath, "file://") {
 			klog.Warning("The local filesystem state store is not functional for running clusters")
@@ -124,4 +123,9 @@ func (f *Factory) Clientset() (simple.Clientset, error) {
 	}
 
 	return f.clientset, nil
+}
+
+// KopsStateStore returns the configured KOPS_STATE_STORE in use
+func (f *Factory) KopsStateStore() string {
+	return f.options.RegistryPath
 }

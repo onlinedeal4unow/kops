@@ -19,72 +19,20 @@ package components
 import (
 	"testing"
 
-	api "k8s.io/kops/pkg/apis/kops"
+	kopsapi "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/apis/kops/util"
 	"k8s.io/kops/pkg/assets"
 )
 
-func buildContainerdCluster(version string) *api.Cluster {
-	return &api.Cluster{
-		Spec: api.ClusterSpec{
+func buildContainerdCluster(version string) *kopsapi.Cluster {
+	return &kopsapi.Cluster{
+		Spec: kopsapi.ClusterSpec{
 			CloudProvider:     "aws",
 			KubernetesVersion: version,
+			Networking: &kopsapi.NetworkingSpec{
+				Kubenet: &kopsapi.KubenetNetworkingSpec{},
+			},
 		},
-	}
-}
-
-func Test_Build_Containerd_Unsupported_Version(t *testing.T) {
-	kubernetesVersions := []string{"1.4.8", "1.5.2", "1.9.0", "1.10.11"}
-	for _, v := range kubernetesVersions {
-
-		c := buildContainerdCluster(v)
-		c.Spec.ContainerRuntime = "containerd"
-		b := assets.NewAssetBuilder(c, "")
-
-		version, err := util.ParseKubernetesVersion(v)
-		if err != nil {
-			t.Fatalf("unexpected error from ParseKubernetesVersion %s: %v", v, err)
-		}
-
-		ob := &ContainerdOptionsBuilder{
-			&OptionsContext{
-				AssetBuilder:      b,
-				KubernetesVersion: *version,
-			},
-		}
-
-		err = ob.BuildOptions(&c.Spec)
-		if err == nil {
-			t.Fatalf("expecting error from BuildOptions when Kubernetes version < 1.11: %s", v)
-		}
-	}
-}
-
-func Test_Build_Containerd_Untested_Version(t *testing.T) {
-	kubernetesVersions := []string{"1.11.0", "1.11.2", "1.14.0", "1.16.3"}
-
-	for _, v := range kubernetesVersions {
-
-		c := buildContainerdCluster(v)
-		c.Spec.ContainerRuntime = "containerd"
-		b := assets.NewAssetBuilder(c, "")
-
-		version, err := util.ParseKubernetesVersion(v)
-		if err != nil {
-			t.Fatalf("unexpected error from ParseKubernetesVersion %s: %v", v, err)
-		}
-
-		ob := &ContainerdOptionsBuilder{
-			&OptionsContext{
-				AssetBuilder:      b,
-				KubernetesVersion: *version,
-			},
-		}
-
-		err = ob.BuildOptions(&c.Spec)
-		if err == nil {
-			t.Fatalf("expecting error when Kubernetes version >= 1.11 and < 1.18: %s", v)
-		}
 	}
 }
 
@@ -95,7 +43,7 @@ func Test_Build_Containerd_Supported_Version(t *testing.T) {
 
 		c := buildContainerdCluster(v)
 		c.Spec.ContainerRuntime = "containerd"
-		b := assets.NewAssetBuilder(c, "")
+		b := assets.NewAssetBuilder(c, false)
 
 		version, err := util.ParseKubernetesVersion(v)
 		if err != nil {
@@ -127,10 +75,10 @@ func Test_Build_Containerd_Unneeded_Runtime(t *testing.T) {
 
 		c := buildContainerdCluster("1.11.0")
 		c.Spec.ContainerRuntime = "docker"
-		c.Spec.Docker = &api.DockerConfig{
+		c.Spec.Docker = &kopsapi.DockerConfig{
 			Version: &v,
 		}
-		b := assets.NewAssetBuilder(c, "")
+		b := assets.NewAssetBuilder(c, false)
 
 		ob := &ContainerdOptionsBuilder{
 			&OptionsContext{
@@ -156,10 +104,10 @@ func Test_Build_Containerd_Needed_Runtime(t *testing.T) {
 
 		c := buildContainerdCluster("1.11.0")
 		c.Spec.ContainerRuntime = "docker"
-		c.Spec.Docker = &api.DockerConfig{
+		c.Spec.Docker = &kopsapi.DockerConfig{
 			Version: &v,
 		}
-		b := assets.NewAssetBuilder(c, "")
+		b := assets.NewAssetBuilder(c, false)
 
 		ob := &ContainerdOptionsBuilder{
 			&OptionsContext{

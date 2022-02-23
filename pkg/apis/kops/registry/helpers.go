@@ -17,13 +17,16 @@ limitations under the License.
 package registry
 
 import (
+	"context"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	api "k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/client/simple"
+	"k8s.io/kops/pkg/kubemanifest"
 )
 
-func CreateClusterConfig(clientset simple.Clientset, cluster *api.Cluster, groups []*api.InstanceGroup) error {
+func CreateClusterConfig(ctx context.Context, clientset simple.Clientset, cluster *api.Cluster, groups []*api.InstanceGroup, addons kubemanifest.ObjectList) error {
 	// Check for instancegroup Name duplicates before writing
 	{
 		names := map[string]bool{}
@@ -38,15 +41,23 @@ func CreateClusterConfig(clientset simple.Clientset, cluster *api.Cluster, group
 		}
 	}
 
-	_, err := clientset.CreateCluster(cluster)
+	_, err := clientset.CreateCluster(ctx, cluster)
 	if err != nil {
 		return err
 	}
 
 	for _, ig := range groups {
-		_, err = clientset.InstanceGroupsFor(cluster).Create(ig)
+		_, err = clientset.InstanceGroupsFor(cluster).Create(ctx, ig, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("error writing updated instancegroup configuration: %v", err)
+		}
+	}
+
+	{
+		addonsClient := clientset.AddonsFor(cluster)
+
+		if err := addonsClient.Replace(addons); err != nil {
+			return fmt.Errorf("error writing updated addon configuration: %v", err)
 		}
 	}
 

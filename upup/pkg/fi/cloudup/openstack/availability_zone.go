@@ -26,10 +26,12 @@ import (
 )
 
 func (c *openstackCloud) ListAvailabilityZones(serviceClient *gophercloud.ServiceClient) (azList []az.AvailabilityZone, err error) {
+	return listAvailabilityZones(c, serviceClient)
+}
 
+func listAvailabilityZones(c OpenstackCloud, serviceClient *gophercloud.ServiceClient) (azList []az.AvailabilityZone, err error) {
 	done, err := vfs.RetryWithBackoff(readBackoff, func() (bool, error) {
 		azPage, err := az.List(serviceClient).AllPages()
-
 		if err != nil {
 			return false, fmt.Errorf("failed to list storage availability zones: %v", err)
 		}
@@ -50,6 +52,10 @@ func (c *openstackCloud) ListAvailabilityZones(serviceClient *gophercloud.Servic
 }
 
 func (c *openstackCloud) GetStorageAZFromCompute(computeAZ string) (*az.AvailabilityZone, error) {
+	return getStorageAZFromCompute(c, computeAZ)
+}
+
+func getStorageAZFromCompute(c OpenstackCloud, computeAZ string) (*az.AvailabilityZone, error) {
 	// TODO: This is less than desirable, but openstack differs here
 	// Check to see if the availability zone exists.
 	azList, err := c.ListAvailabilityZones(c.BlockStorageClient())

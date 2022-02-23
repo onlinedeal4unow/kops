@@ -6,20 +6,20 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 http_archive(
     name = "io_bazel_rules_go",
+    sha256 = "2b1641428dff9018f9e85c0384f03ec6c10660d935b750e3fa1492a281a53b0f",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.22.2/rules_go-v0.22.2.tar.gz",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.22.2/rules_go-v0.22.2.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.29.0/rules_go-v0.29.0.zip",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.29.0/rules_go-v0.29.0.zip",
     ],
-    sha256 = "142dd33e38b563605f0d20e89d9ef9eda0fc3cb539a14be1bdb1350de2eda659",
 )
 
 http_archive(
     name = "bazel_gazelle",
+    sha256 = "62ca106be173579c0a167deb23358fdfe71ffa1e4cfdddf5582af26520f1c66f",
     urls = [
-        "https://storage.googleapis.com/bazel-mirror/github.com/bazelbuild/bazel-gazelle/releases/download/v0.20.0/bazel-gazelle-v0.20.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.20.0/bazel-gazelle-v0.20.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
     ],
-    sha256 = "d8c45ee70ec39a57e7a05e5027c32b1576cc7f16d9dd37135b0eddde45cf1b10",
 )
 
 load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
@@ -27,7 +27,7 @@ load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_depe
 go_rules_dependencies()
 
 go_register_toolchains(
-    go_version = "1.13.9",
+    go_version = "1.17.5",
 )
 
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies", "go_repository")
@@ -37,12 +37,11 @@ gazelle_dependencies()
 #=============================================================================
 # Docker rules
 
-git_repository(
+http_archive(
     name = "io_bazel_rules_docker",
-    commit = "3772262910d1ac63563e5f1758f07df1f7857442",
-    remote = "https://github.com/bazelbuild/rules_docker.git",
-    shallow_since = "1568404961 -0400",
-    # tag = "v0.14.1",
+    sha256 = "92779d3445e7bdc79b961030b996cb0c91820ade7ffa7edca69273f404b085d5",
+    strip_prefix = "rules_docker-0.20.0",
+    urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.20.0/rules_docker-v0.20.0.tar.gz"],
 )
 
 load(
@@ -68,76 +67,6 @@ load(
     "container_pull",
 )
 
-container_pull(
-    name = "debian_hyperkube_base_amd64",
-    # 'tag' is also supported, but digest is encouraged for reproducibility.
-    digest = "sha256:5d4ea2fb5fbe9a9a9da74f67cf2faefc881968bc39f2ac5d62d9167e575812a1",
-    registry = "k8s.gcr.io",
-    repository = "debian-hyperkube-base-amd64",
-    tag = "0.12.1",
-)
-
-git_repository(
-    name = "distroless",
-    commit = "f905a6636c5106c36cc979bdcc19f0fe4fc01ede",
-    remote = "https://github.com/googlecloudplatform/distroless.git",
-    #shallow_since = "1570036739 -0700",
-)
-
-load(
-    "@distroless//package_manager:package_manager.bzl",
-    "package_manager_repositories",
-)
-
-package_manager_repositories()
-
-load(
-    "@distroless//package_manager:dpkg.bzl",
-    "dpkg_list",
-    "dpkg_src",
-)
-
-dpkg_src(
-    name = "debian_stretch",
-    arch = "amd64",
-    distro = "stretch",
-    sha256 = "da378b113f0b1edcf5b1f2c3074fd5476c7fd6e6df3752f824aad22e7547e699",
-    snapshot = "20190520T104418Z",
-    url = "http://snapshot.debian.org/archive",
-)
-
-dpkg_list(
-    name = "package_bundle",
-    packages = [
-        "cgmanager",
-        "dbus",
-        "libapparmor1",
-        "libcgmanager0",
-        "libcryptsetup4",
-        "libdbus-1-3",
-        "libnih-dbus1",
-        "libnih1",
-        "libpam-systemd",
-        "libprocps6",
-        "libseccomp2",
-        "procps",
-        "systemd",
-        "systemd-shim",
-    ],
-    sources = [
-        "@debian_stretch//file:Packages.json",
-    ],
-)
-
-# We use the prebuilt utils.tar.gz containing socat & conntrack, building it in bazel is really painful
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
-
-http_file(
-    name = "utils_tar_gz",
-    sha256 = "5c956247241dd94300ba13c6dd9cb5843382d4255125a7a6639d2aad68b9050c",
-    urls = ["https://kubeupv2.s3.amazonaws.com/kops/1.12.1/linux/amd64/utils.tar.gz"],
-)
-
 # TODO(fejta): use load.bzl, repos.bzl from repo-infra
 git_repository(
     name = "io_k8s_repo_infra",
@@ -148,11 +77,11 @@ git_repository(
 
 http_archive(
     name = "bazel_toolchains",
-    sha256 = "a019fbd579ce5aed0239de865b2d8281dbb809efd537bf42e0d366783e8dec65",
-    strip_prefix = "bazel-toolchains-0.29.2",
+    sha256 = "179ec02f809e86abf56356d8898c8bd74069f1bd7c56044050c2cd3d79d0e024",
+    strip_prefix = "bazel-toolchains-4.1.0",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/archive/0.29.2.tar.gz",
-        "https://github.com/bazelbuild/bazel-toolchains/archive/0.29.2.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/releases/download/4.1.0/bazel-toolchains-4.1.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-toolchains/releases/download/4.1.0/bazel-toolchains-4.1.0.tar.gz",
     ],
 )
 
@@ -169,15 +98,29 @@ go_repository(
 
 # Start using distroless base
 container_pull(
-    name = "distroless_base",
-    digest = "sha256:7fa7445dfbebae4f4b7ab0e6ef99276e96075ae42584af6286ba080750d6dfe5",
+    name = "distroless_base_amd64",
+    digest = "sha256:ba7a315f86771332e76fa9c3d423ecfdbb8265879c6f1c264d6fff7d4fa460a4",
     registry = "gcr.io",
     repository = "distroless/base",
 )
 
 container_pull(
-    name = "distroless_base_debug",
-    digest = "sha256:6f78124292427599fcef84139cdc9f4ab2d1851fe129b140c92b997f8fe4d289",
+    name = "distroless_base_arm64",
+    digest = "sha256:4f8aa0aba190e375a5a53bb71a303c89d9734c817714aeaca9bb23b82135ed91",
+    registry = "gcr.io",
+    repository = "distroless/base",
+)
+
+container_pull(
+    name = "distroless_base_debug_amd64",
+    digest = "sha256:efd8711717d9e9b5d0dbb20ea10876dab0609c923bc05321b912f9239090ca80",
+    registry = "gcr.io",
+    repository = "distroless/base",
+)
+
+container_pull(
+    name = "distroless_base_debug_arm64",
+    digest = "sha256:3aaeedaad3046eb02e90108150f3f754785d7baf635d263268328d64662df919",
     registry = "gcr.io",
     repository = "distroless/base",
 )

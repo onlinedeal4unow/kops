@@ -25,7 +25,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
-	"github.com/ghodss/yaml"
+	"sigs.k8s.io/yaml"
 )
 
 func TestGetASGTagsToDelete(t *testing.T) {
@@ -201,12 +201,12 @@ func TestAutoscalingGroupTerraformRender(t *testing.T) {
 	cases := []*renderTest{
 		{
 			Resource: &AutoscalingGroup{
-				Name:                fi.String("test"),
-				Granularity:         fi.String("5min"),
-				LaunchConfiguration: &LaunchConfiguration{Name: fi.String("test_lc")},
-				MaxSize:             fi.Int64(10),
-				Metrics:             []string{"test"},
-				MinSize:             fi.Int64(1),
+				Name:           fi.String("test"),
+				Granularity:    fi.String("5min"),
+				LaunchTemplate: &LaunchTemplate{Name: fi.String("test_lc")},
+				MaxSize:        fi.Int64(10),
+				Metrics:        []string{"test"},
+				MinSize:        fi.Int64(1),
 				Subnets: []*Subnet{
 					{
 						Name: fi.String("test-sg"),
@@ -223,12 +223,15 @@ func TestAutoscalingGroupTerraformRender(t *testing.T) {
 }
 
 resource "aws_autoscaling_group" "test" {
-  enabled_metrics      = ["test"]
-  launch_configuration = aws_launch_configuration.test_lc.id
-  max_size             = 10
-  metrics_granularity  = "5min"
-  min_size             = 1
-  name                 = "test"
+  enabled_metrics = ["test"]
+  launch_template {
+    id      = aws_launch_template.test_lc.id
+    version = aws_launch_template.test_lc.latest_version
+  }
+  max_size            = 10
+  metrics_granularity = "5min"
+  min_size            = 1
+  name                = "test"
   tag {
     key                 = "cluster"
     propagate_at_launch = true
@@ -243,7 +246,14 @@ resource "aws_autoscaling_group" "test" {
 }
 
 terraform {
-  required_version = ">= 0.12.0"
+  required_version = ">= 0.15.0"
+  required_providers {
+    aws = {
+      "configuration_aliases" = [aws.files]
+      "source"                = "hashicorp/aws"
+      "version"               = ">= 3.71.0"
+    }
+  }
 }
 `,
 		},
@@ -311,7 +321,14 @@ resource "aws_autoscaling_group" "test1" {
 }
 
 terraform {
-  required_version = ">= 0.12.0"
+  required_version = ">= 0.15.0"
+  required_providers {
+    aws = {
+      "configuration_aliases" = [aws.files]
+      "source"                = "hashicorp/aws"
+      "version"               = ">= 3.71.0"
+    }
+  }
 }
 `,
 		},
@@ -349,8 +366,8 @@ func TestAutoscalingGroupCloudformationRender(t *testing.T) {
       "Type": "AWS::AutoScaling::AutoScalingGroup",
       "Properties": {
         "AutoScalingGroupName": "test1",
-        "MaxSize": 10,
-        "MinSize": 5,
+        "MaxSize": "10",
+        "MinSize": "5",
         "VPCZoneIdentifier": [
           {
             "Ref": "AWSEC2Subnettestsg"

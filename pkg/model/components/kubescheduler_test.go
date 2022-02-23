@@ -45,7 +45,7 @@ func Test_Build_Scheduler_Without_PolicyConfigMap(t *testing.T) {
 
 		c := buildCluster()
 		c.Spec.KubernetesVersion = v
-		b := assets.NewAssetBuilder(c, "")
+		b := assets.NewAssetBuilder(c, false)
 
 		version, err := util.ParseKubernetesVersion(v)
 		if err != nil {
@@ -65,7 +65,6 @@ func Test_Build_Scheduler_Without_PolicyConfigMap(t *testing.T) {
 			t.Fatalf("unexpected error from BuildOptions: %v", err)
 		}
 	}
-
 }
 
 func Test_Build_Scheduler_PolicyConfigMap_Supported_Version(t *testing.T) {
@@ -74,7 +73,7 @@ func Test_Build_Scheduler_PolicyConfigMap_Supported_Version(t *testing.T) {
 	for _, v := range versions {
 
 		c := buildSchedulerConfigMapCluster(v)
-		b := assets.NewAssetBuilder(c, "")
+		b := assets.NewAssetBuilder(c, false)
 
 		version, err := util.ParseKubernetesVersion(v)
 		if err != nil {
@@ -93,5 +92,4 @@ func Test_Build_Scheduler_PolicyConfigMap_Supported_Version(t *testing.T) {
 			t.Fatalf("unexpected error from BuildOptions %s: %v", v, err)
 		}
 	}
-
 }

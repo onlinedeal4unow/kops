@@ -28,7 +28,7 @@ import (
 	"os"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/kops/pkg/try"
 )
@@ -71,7 +71,7 @@ func (ha HashAlgorithm) NewHasher() hash.Hash {
 }
 
 func (ha HashAlgorithm) FromString(s string) (*Hash, error) {
-	l := -1
+	var l int
 	switch ha {
 	case HashAlgorithmMD5:
 		l = 32
@@ -92,6 +92,14 @@ func (ha HashAlgorithm) FromString(s string) (*Hash, error) {
 		return nil, fmt.Errorf("invalid hash %q - not hex", s)
 	}
 	return &Hash{Algorithm: ha, HashValue: hashValue}, nil
+}
+
+func MustFromString(s string) *Hash {
+	h, err := FromString(s)
+	if err != nil {
+		klog.Fatalf("FromString(%q) failed with %v", s, err)
+	}
+	return h
 }
 
 func FromString(s string) (*Hash, error) {

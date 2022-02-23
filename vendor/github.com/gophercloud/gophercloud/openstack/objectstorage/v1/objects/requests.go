@@ -105,6 +105,12 @@ func (opts DownloadOpts) ToObjectDownloadParams() (map[string]string, string, er
 	if err != nil {
 		return nil, q.String(), err
 	}
+	if !opts.IfModifiedSince.IsZero() {
+		h["If-Modified-Since"] = opts.IfModifiedSince.Format(time.RFC1123)
+	}
+	if !opts.IfUnmodifiedSince.IsZero() {
+		h["If-Unmodified-Since"] = opts.IfUnmodifiedSince.Format(time.RFC1123)
+	}
 	return h, q.String(), nil
 }
 
@@ -127,14 +133,11 @@ func Download(c *gophercloud.ServiceClient, containerName, objectName string, op
 	}
 
 	resp, err := c.Get(url, nil, &gophercloud.RequestOpts{
-		MoreHeaders: h,
-		OkCodes:     []int{200, 206, 304},
+		MoreHeaders:      h,
+		OkCodes:          []int{200, 206, 304},
+		KeepResponseBody: true,
 	})
-	if resp != nil {
-		r.Header = resp.Header
-		r.Body = resp.Body
-	}
-	r.Err = err
+	r.Body, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -155,8 +158,8 @@ type CreateOpts struct {
 	ContentLength      int64  `h:"Content-Length"`
 	ContentType        string `h:"Content-Type"`
 	CopyFrom           string `h:"X-Copy-From"`
-	DeleteAfter        int    `h:"X-Delete-After"`
-	DeleteAt           int    `h:"X-Delete-At"`
+	DeleteAfter        int64  `h:"X-Delete-After"`
+	DeleteAt           int64  `h:"X-Delete-At"`
 	DetectContentType  string `h:"X-Detect-Content-Type"`
 	ETag               string `h:"ETag"`
 	IfNoneMatch        string `h:"If-None-Match"`
@@ -237,14 +240,10 @@ func Create(c *gophercloud.ServiceClient, containerName, objectName string, opts
 		b = tmpB
 	}
 
-	resp, err := c.Put(url, nil, nil, &gophercloud.RequestOpts{
-		RawBody:     b,
+	resp, err := c.Put(url, b, nil, &gophercloud.RequestOpts{
 		MoreHeaders: h,
 	})
-	r.Err = err
-	if resp != nil {
-		r.Header = resp.Header
-	}
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -294,10 +293,7 @@ func Copy(c *gophercloud.ServiceClient, containerName, objectName string, opts C
 		MoreHeaders: h,
 		OkCodes:     []int{201},
 	})
-	if resp != nil {
-		r.Header = resp.Header
-	}
-	r.Err = err
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -330,10 +326,7 @@ func Delete(c *gophercloud.ServiceClient, containerName, objectName string, opts
 		url += query
 	}
 	resp, err := c.Delete(url, nil)
-	if resp != nil {
-		r.Header = resp.Header
-	}
-	r.Err = err
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -386,10 +379,7 @@ func Get(c *gophercloud.ServiceClient, containerName, objectName string, opts Ge
 		MoreHeaders: h,
 		OkCodes:     []int{200, 204},
 	})
-	if resp != nil {
-		r.Header = resp.Header
-	}
-	r.Err = err
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -403,12 +393,13 @@ type UpdateOptsBuilder interface {
 // deleting an object's metadata.
 type UpdateOpts struct {
 	Metadata           map[string]string
-	ContentDisposition string `h:"Content-Disposition"`
-	ContentEncoding    string `h:"Content-Encoding"`
-	ContentType        string `h:"Content-Type"`
-	DeleteAfter        int    `h:"X-Delete-After"`
-	DeleteAt           int    `h:"X-Delete-At"`
-	DetectContentType  bool   `h:"X-Detect-Content-Type"`
+	RemoveMetadata     []string
+	ContentDisposition *string `h:"Content-Disposition"`
+	ContentEncoding    *string `h:"Content-Encoding"`
+	ContentType        *string `h:"Content-Type"`
+	DeleteAfter        *int64  `h:"X-Delete-After"`
+	DeleteAt           *int64  `h:"X-Delete-At"`
+	DetectContentType  *bool   `h:"X-Detect-Content-Type"`
 }
 
 // ToObjectUpdateMap formats a UpdateOpts into a map of headers.
@@ -417,8 +408,13 @@ func (opts UpdateOpts) ToObjectUpdateMap() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	for k, v := range opts.Metadata {
 		h["X-Object-Meta-"+k] = v
+	}
+
+	for _, k := range opts.RemoveMetadata {
+		h["X-Remove-Object-Meta-"+k] = "remove"
 	}
 	return h, nil
 }
@@ -441,10 +437,7 @@ func Update(c *gophercloud.ServiceClient, containerName, objectName string, opts
 	resp, err := c.Post(url, nil, nil, &gophercloud.RequestOpts{
 		MoreHeaders: h,
 	})
-	if resp != nil {
-		r.Header = resp.Header
-	}
-	r.Err = err
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
 	return
 }
 
@@ -472,6 +465,9 @@ type CreateTempURLOpts struct {
 	// the object path is used in the hash, the object URL needs to be parsed. If
 	// empty, the default OpenStack URL split point will be used ("/v1/").
 	Split string
+
+	// Timestamp is a timestamp to calculate Temp URL signature. Optional.
+	Timestamp time.Time
 }
 
 // CreateTempURL is a function for creating a temporary URL for an object. It
@@ -481,8 +477,17 @@ func CreateTempURL(c *gophercloud.ServiceClient, containerName, objectName strin
 	if opts.Split == "" {
 		opts.Split = "/v1/"
 	}
+
+	// Initialize time if it was not passed as opts
+	var date time.Time
+	if opts.Timestamp.IsZero() {
+		date = time.Now().UTC()
+	} else {
+		date = opts.Timestamp
+	}
+
 	duration := time.Duration(opts.TTL) * time.Second
-	expiry := time.Now().Add(duration).Unix()
+	expiry := date.Add(duration).Unix()
 	getHeader, err := containers.Get(c, containerName, nil).Extract()
 	if err != nil {
 		return "", err
@@ -506,4 +511,25 @@ func CreateTempURL(c *gophercloud.ServiceClient, containerName, objectName strin
 	hash.Write([]byte(body))
 	hexsum := fmt.Sprintf("%x", hash.Sum(nil))
 	return fmt.Sprintf("%s%s?temp_url_sig=%s&temp_url_expires=%d", baseURL, objectPath, hexsum, expiry), nil
+}
+
+// BulkDelete is a function that bulk deletes objects.
+func BulkDelete(c *gophercloud.ServiceClient, container string, objects []string) (r BulkDeleteResult) {
+	// urlencode object names to be on the safe side
+	// https://github.com/openstack/swift/blob/stable/train/swift/common/middleware/bulk.py#L160
+	// https://github.com/openstack/swift/blob/stable/train/swift/common/swob.py#L302
+	encodedObjects := make([]string, len(objects))
+	for i, v := range objects {
+		encodedObjects[i] = strings.Join([]string{container, v}, "/")
+	}
+	b := strings.NewReader(strings.Join(encodedObjects, "\n") + "\n")
+	resp, err := c.Post(bulkDeleteURL(c), b, &r.Body, &gophercloud.RequestOpts{
+		MoreHeaders: map[string]string{
+			"Accept":       "application/json",
+			"Content-Type": "text/plain",
+		},
+		OkCodes: []int{200},
+	})
+	_, r.Header, r.Err = gophercloud.ParseResponse(resp, err)
+	return
 }

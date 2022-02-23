@@ -18,8 +18,9 @@ package protokube
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -28,8 +29,8 @@ import (
 	"time"
 
 	"github.com/digitalocean/godo"
+	"golang.org/x/oauth2"
 
-	"k8s.io/kops/pkg/resources/digitalocean"
 	"k8s.io/kops/protokube/pkg/etcd"
 	"k8s.io/kops/protokube/pkg/gossip"
 	gossipdo "k8s.io/kops/protokube/pkg/gossip/do"
@@ -44,9 +45,14 @@ const (
 	localDevicePrefix            = "/dev/disk/by-id/scsi-0DO_Volume_"
 )
 
+// TokenSource implements oauth2.TokenSource
+type TokenSource struct {
+	AccessToken string
+}
+
 type DOVolumes struct {
-	ClusterID string
-	Cloud     *digitalocean.Cloud
+	ClusterID  string
+	godoClient *godo.Client
 
 	region      string
 	dropletName string
@@ -57,7 +63,7 @@ type DOVolumes struct {
 var _ Volumes = &DOVolumes{}
 
 func GetClusterID() (string, error) {
-	var clusterID = ""
+	clusterID := ""
 
 	dropletTags, err := getMetadataDropletTags()
 	if err != nil {
@@ -103,7 +109,7 @@ func NewDOVolumes() (*DOVolumes, error) {
 		return nil, fmt.Errorf("failed to get droplet name: %s", err)
 	}
 
-	cloud, err := digitalocean.NewCloud(region)
+	godoClient, err := NewDOCloud()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize digitalocean cloud: %s", err)
 	}
@@ -119,7 +125,7 @@ func NewDOVolumes() (*DOVolumes, error) {
 	}
 
 	return &DOVolumes{
-		Cloud:       cloud,
+		godoClient:  godoClient,
 		ClusterID:   clusterID,
 		dropletID:   dropletIDInt,
 		dropletName: dropletName,
@@ -128,9 +134,33 @@ func NewDOVolumes() (*DOVolumes, error) {
 	}, nil
 }
 
+// Token() returns oauth2.Token
+func (t *TokenSource) Token() (*oauth2.Token, error) {
+	token := &oauth2.Token{
+		AccessToken: t.AccessToken,
+	}
+	return token, nil
+}
+
+func NewDOCloud() (*godo.Client, error) {
+	accessToken := os.Getenv("DIGITALOCEAN_ACCESS_TOKEN")
+	if accessToken == "" {
+		return nil, errors.New("DIGITALOCEAN_ACCESS_TOKEN is required")
+	}
+
+	tokenSource := &TokenSource{
+		AccessToken: accessToken,
+	}
+
+	oauthClient := oauth2.NewClient(context.TODO(), tokenSource)
+	client := godo.NewClient(oauthClient)
+
+	return client, nil
+}
+
 func (d *DOVolumes) AttachVolume(volume *Volume) error {
 	for {
-		action, _, err := d.Cloud.VolumeActions().Attach(context.TODO(), volume.ID, d.dropletID)
+		action, _, err := d.godoClient.StorageActions.Attach(context.TODO(), volume.ID, d.dropletID)
 		if err != nil {
 			return fmt.Errorf("error attaching volume: %s", err)
 		}
@@ -158,7 +188,7 @@ func (d *DOVolumes) AttachVolume(volume *Volume) error {
 }
 
 func (d *DOVolumes) FindVolumes() ([]*Volume, error) {
-	doVolumes, err := getAllVolumesByRegion(d.Cloud, d.region)
+	doVolumes, err := getAllVolumesByRegion(d.godoClient, d.region)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %s", err)
 	}
@@ -195,16 +225,15 @@ func (d *DOVolumes) FindVolumes() ([]*Volume, error) {
 	return volumes, nil
 }
 
-func getAllVolumesByRegion(cloud *digitalocean.Cloud, region string) ([]godo.Volume, error) {
+func getAllVolumesByRegion(godoClient *godo.Client, region string) ([]godo.Volume, error) {
 	allVolumes := []godo.Volume{}
 
 	opt := &godo.ListOptions{}
 	for {
-		volumes, resp, err := cloud.Volumes().ListVolumes(context.TODO(), &godo.ListVolumeParams{
+		volumes, resp, err := godoClient.Storage.ListVolumes(context.TODO(), &godo.ListVolumeParams{
 			Region:      region,
 			ListOptions: opt,
 		})
-
 		if err != nil {
 			return nil, err
 		}
@@ -224,7 +253,6 @@ func getAllVolumesByRegion(cloud *digitalocean.Cloud, region string) ([]godo.Vol
 	}
 
 	return allVolumes, nil
-
 }
 
 func (d *DOVolumes) FindMountedVolume(volume *Volume) (string, error) {
@@ -243,9 +271,8 @@ func (d *DOVolumes) FindMountedVolume(volume *Volume) (string, error) {
 }
 
 func (d *DOVolumes) getVolumeByID(id string) (*godo.Volume, error) {
-	vol, _, err := d.Cloud.Volumes().GetVolume(context.TODO(), id)
+	vol, _, err := d.godoClient.Storage.GetVolume(context.TODO(), id)
 	return vol, err
-
 }
 
 // getEtcdClusterSpec returns etcd.EtcdClusterSpec which holds
@@ -280,7 +307,7 @@ func getLocalDeviceName(vol *godo.Volume) string {
 func (d *DOVolumes) GossipSeeds() (gossip.SeedProvider, error) {
 	for _, dropletTag := range d.dropletTags {
 		if strings.Contains(dropletTag, strings.Replace(d.ClusterID, ".", "-", -1)) {
-			return gossipdo.NewSeedProvider(d.Cloud, dropletTag)
+			return gossipdo.NewSeedProvider(d.godoClient, dropletTag)
 		}
 	}
 
@@ -315,7 +342,6 @@ func getMetadataDropletID() (string, error) {
 }
 
 func getMetadataDropletTags() ([]string, error) {
-
 	tagString, err := getMetadata(dropletIDMetadataTags)
 	return strings.Split(tagString, "\n"), err
 }
@@ -332,7 +358,7 @@ func getMetadata(url string) (string, error) {
 		return "", fmt.Errorf("droplet metadata returned non-200 status code: %d", resp.StatusCode)
 	}
 
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}

@@ -22,9 +22,9 @@ set -o pipefail
 
 # required version for this script, if not installed on the host we will
 # use the official docker image instead. keep this in sync with SHELLCHECK_IMAGE
-SHELLCHECK_VERSION="0.7.0"
-# upstream shellcheck latest stable image as of October 23rd, 2019
-SHELLCHECK_IMAGE="koalaman/shellcheck-alpine:v0.7.0@sha256:24bbf52aae6eaa27accc9f61de32d30a1498555e6ef452966d0702ff06f38ecb"
+SHELLCHECK_VERSION="0.7.1"
+# upstream shellcheck latest stable image as of September 1st, 2020
+SHELLCHECK_IMAGE="koalaman/shellcheck-alpine:v0.7.1@sha256:6093ec552a8c918483dca0544d44ad56a43c4dbf1d85447f2316f8e3b15e3cb6"
 
 # fixed name for the shellcheck docker container so we can reliably clean it up
 SHELLCHECK_CONTAINER="k8s-shellcheck"
@@ -74,7 +74,7 @@ cd "${KOPS_ROOT}"
 all_shell_scripts=()
 while IFS=$'\n' read -r script;
   do git check-ignore -q "$script" || all_shell_scripts+=("$script");
-done < <(find . -name "*.sh" \
+done < <(find . -type f -name "*.sh" \
   -not \( \
     -path ./_\*      -o \
     -path ./.git\*   -o \

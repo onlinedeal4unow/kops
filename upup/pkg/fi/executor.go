@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 type executor struct {
@@ -54,6 +54,14 @@ func (o *RunTasksOptions) InitDefaults() {
 // It will perform some re-execution on error, retrying as long as progress is still being made
 func (e *executor) RunTasks(taskMap map[string]Task) error {
 	dependencies := FindTaskDependencies(taskMap)
+
+	for _, task := range taskMap {
+		if taskPreRun, ok := task.(TaskPreRun); ok {
+			if err := taskPreRun.PreRun(e.context); err != nil {
+				return err
+			}
+		}
+	}
 
 	taskStates := make(map[string]*taskState)
 
@@ -125,7 +133,11 @@ func (e *executor) RunTasks(taskMap map[string]Task) error {
 				}
 
 				remaining := time.Second * time.Duration(int(time.Until(ts.deadline).Seconds()))
-				klog.Warningf("error running task %q (%v remaining to succeed): %v", ts.key, remaining, err)
+				if _, ok := err.(*TryAgainLaterError); ok {
+					klog.V(2).Infof("Task %q not ready: %v", ts.key, err)
+				} else {
+					klog.Warningf("error running task %q (%v remaining to succeed): %v", ts.key, remaining, err)
+				}
 				errors = append(errors, err)
 				ts.lastError = err
 			} else {
@@ -140,7 +152,7 @@ func (e *executor) RunTasks(taskMap map[string]Task) error {
 				// Logic error!
 				panic("did not make progress executing tasks; but no errors reported")
 			}
-			klog.Infof("No progress made, sleeping before retrying %d failed task(s)", len(errors))
+			klog.Infof("No progress made, sleeping before retrying %d task(s)", len(errors))
 			time.Sleep(e.options.WaitAfterAllTasksFailed)
 		}
 	}

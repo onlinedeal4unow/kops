@@ -1,5 +1,5 @@
 /*
-Copyright 2020 The Kubernetes Authors.
+Copyright The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,14 +26,16 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	kopsinternalversion "k8s.io/kops/pkg/apis/kops"
 	kopsv1alpha2 "k8s.io/kops/pkg/apis/kops/v1alpha2"
+	kopsv1alpha3 "k8s.io/kops/pkg/apis/kops/v1alpha3"
 )
 
 var scheme = runtime.NewScheme()
 var codecs = serializer.NewCodecFactory(scheme)
-var parameterCodec = runtime.NewParameterCodec(scheme)
+
 var localSchemeBuilder = runtime.SchemeBuilder{
 	kopsinternalversion.AddToScheme,
 	kopsv1alpha2.AddToScheme,
+	kopsv1alpha3.AddToScheme,
 }
 
 // AddToScheme adds all types of this clientset into the given scheme. This allows composition

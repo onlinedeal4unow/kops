@@ -1,8 +1,18 @@
 ## Office Hours
 
-Kops maintainers set aside one hour every other week for **public** office hours. This time is used to gather with community members interested in kops. This session is open to both developers and users.
+kOps maintainers set aside one hour every week for **public** office hours. This time is used to gather with community members interested in kOps. This session is open to both developers and users.
 
-Office hours are hosted on a [zoom video chat](https://zoom.us/my/k8ssigaws) on Fridays at [12 noon (Eastern Time)/9 am (Pacific Time)](http://www.worldtimebuddy.com/?pl=1&lid=100,5,8,12) during weeks with odd "numbers". To check this weeks' number, run: `date +%V`. If the response is odd, join us on Friday for office hours!
+The time and date for the office hours can be found in the [sig-cluster-lifecycle calendar](https://calendar.google.com/calendar/u/0/embed?src=u5822lrl4q68ic1iakuvcpe7b4@group.calendar.google.com).
+
+The office hourse are hosted in a [zoom video chat](https://zoom.us/j/97072789944?pwd=VVlUR3dhN2h5TEFQZHZTVVd4SnJUdz09).
+
+### Regular office hours
+
+The regular office hours are typically more formal and tend to focus on discussons. They are typically recorded.
+
+### Bonus meetings
+
+Since the regular office hours do not fit everyones schedule, kOps maintainers also host additional office hours with a more loose agenda. These are typically not recorded. 
 
 ### Office Hours Topics
 
@@ -14,13 +24,13 @@ Our office hours call is recorded, but the tone tends to be casual. First-timers
 - Members planning for what we want to get done for the next release
 - Strategizing for larger initiatives, such as those that involve more than one sig or potentially more moving pieces
 - Help wanted requests
-- Demonstrations of cool stuff. PoCs. Fresh ideas. Show us how you use kops to go beyond the norm- help us define the future!
+- Demonstrations of cool stuff. PoCs. Fresh ideas. Show us how you use kOps to go beyond the norm- help us define the future!
 
-Office hours are designed for ALL of those contributing to kops or the community. Contributions are not limited to those who commit source code. There are so many important ways to be involved:
+Office hours are designed for ALL of those contributing to kOps or the community. Contributions are not limited to those who commit source code. There are so many important ways to be involved:
 
 - helping in the slack channels
 - triaging/writing issues
 - thinking about the topics raised at office hours and forming and advocating for your good ideas forming opinions
 - testing pre-(and official) releases
 
-Although not exhaustive, the above activities are extremely important to our continued success and are all worth contributions. If you want to talk about kops and you have doubt, just come.
+Although not exhaustive, the above activities are extremely important to our continued success and are all worth contributions. If you want to talk about kOps and you have doubt, just come.

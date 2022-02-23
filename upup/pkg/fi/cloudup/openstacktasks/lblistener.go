@@ -18,21 +18,20 @@ package openstacktasks
 
 import (
 	"fmt"
+	"sort"
 
-	"k8s.io/klog"
-	// "github.com/gophercloud/gophercloud/openstack/compute/v2/extensions/floatingips"
 	"github.com/gophercloud/gophercloud/openstack/loadbalancer/v2/listeners"
-	openstackutil "k8s.io/cloud-provider-openstack/pkg/util/openstack"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
 )
 
-//go:generate fitask -type=LBListener
+// +kops:fitask
 type LBListener struct {
 	ID           *string
 	Name         *string
 	Pool         *LBPool
-	Lifecycle    *fi.Lifecycle
+	Lifecycle    fi.Lifecycle
 	AllowedCIDRs []string
 }
 
@@ -56,15 +55,17 @@ func (s *LBListener) CompareWithID() *string {
 	return s.ID
 }
 
-func NewLBListenerTaskFromCloud(cloud openstack.OpenstackCloud, lifecycle *fi.Lifecycle, lb *listeners.Listener, find *LBListener) (*LBListener, error) {
+func NewLBListenerTaskFromCloud(cloud openstack.OpenstackCloud, lifecycle fi.Lifecycle, listener *listeners.Listener, find *LBListener) (*LBListener, error) {
+	// sort for consistent comparison
+	sort.Strings(listener.AllowedCIDRs)
 	listenerTask := &LBListener{
-		ID:           fi.String(lb.ID),
-		Name:         fi.String(lb.Name),
-		AllowedCIDRs: lb.AllowedCIDRs,
+		ID:           fi.String(listener.ID),
+		Name:         fi.String(listener.Name),
+		AllowedCIDRs: listener.AllowedCIDRs,
 		Lifecycle:    lifecycle,
 	}
 
-	for _, pool := range lb.Pools {
+	for _, pool := range listener.Pools {
 		poolTask, err := NewLBPoolTaskFromCloud(cloud, lifecycle, &pool, find.Pool)
 		if err != nil {
 			return nil, fmt.Errorf("NewLBListenerTaskFromCloud: Failed to create new LBListener task for pool %s: %v", pool.Name, err)
@@ -127,17 +128,22 @@ func (_ *LBListener) CheckChanges(a, e, changes *LBListener) error {
 }
 
 func (_ *LBListener) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e, changes *LBListener) error {
+	useVIPACL, err := t.Cloud.UseLoadBalancerVIPACL()
+	if err != nil {
+		return err
+	}
+
 	if a == nil {
 		klog.V(2).Infof("Creating LB with Name: %q", fi.StringValue(e.Name))
 		listeneropts := listeners.CreateOpts{
 			Name:           fi.StringValue(e.Name),
-			DefaultPoolID:  *e.Pool.ID,
-			LoadbalancerID: *e.Pool.Loadbalancer.ID,
+			DefaultPoolID:  fi.StringValue(e.Pool.ID),
+			LoadbalancerID: fi.StringValue(e.Pool.Loadbalancer.ID),
 			Protocol:       listeners.ProtocolTCP,
 			ProtocolPort:   443,
 		}
 
-		if openstackutil.IsOctaviaFeatureSupported(t.Cloud.LoadBalancerClient(), openstackutil.OctaviaFeatureVIPACL) {
+		if useVIPACL {
 			listeneropts.AllowedCIDRs = e.AllowedCIDRs
 		}
 
@@ -148,7 +154,7 @@ func (_ *LBListener) RenderOpenstack(t *openstack.OpenstackAPITarget, a, e, chan
 		e.ID = fi.String(listener.ID)
 		return nil
 	} else if len(changes.AllowedCIDRs) > 0 {
-		if openstackutil.IsOctaviaFeatureSupported(t.Cloud.LoadBalancerClient(), openstackutil.OctaviaFeatureVIPACL) {
+		if useVIPACL {
 			opts := listeners.UpdateOpts{
 				AllowedCIDRs: &changes.AllowedCIDRs,
 			}

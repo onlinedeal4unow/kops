@@ -4,6 +4,8 @@ go_library(
     name = "go_default_library",
     srcs = [
         "authorization.go",
+        "authorization_sas.go",
+        "authorization_storage.go",
         "autorest.go",
         "client.go",
         "error.go",
@@ -14,6 +16,8 @@ go_library(
         "retriablerequest_1.8.go",
         "sender.go",
         "utility.go",
+        "utility_1.13.go",
+        "utility_legacy.go",
         "version.go",
     ],
     importmap = "k8s.io/kops/vendor/github.com/Azure/go-autorest/autorest",

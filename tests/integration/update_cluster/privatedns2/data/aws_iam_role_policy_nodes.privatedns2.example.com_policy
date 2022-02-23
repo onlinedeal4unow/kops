@@ -1,68 +1,42 @@
 {
-  "Version": "2012-10-17",
   "Statement": [
     {
-      "Effect": "Allow",
       "Action": [
+        "s3:Get*"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:s3:::placeholder-read-bucket/clusters.example.com/privatedns2.example.com/addons/*",
+        "arn:aws-test:s3:::placeholder-read-bucket/clusters.example.com/privatedns2.example.com/cluster-completed.spec",
+        "arn:aws-test:s3:::placeholder-read-bucket/clusters.example.com/privatedns2.example.com/igconfig/node/*",
+        "arn:aws-test:s3:::placeholder-read-bucket/clusters.example.com/privatedns2.example.com/secrets/dockerconfig"
+      ]
+    },
+    {
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:GetEncryptionConfiguration",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws-test:s3:::placeholder-read-bucket"
+      ]
+    },
+    {
+      "Action": [
+        "autoscaling:DescribeAutoScalingInstances",
+        "ec2:DescribeInstanceTypes",
         "ec2:DescribeInstances",
-        "ec2:DescribeRegions"
+        "ec2:DescribeRegions",
+        "iam:GetServerCertificate",
+        "iam:ListServerCertificates",
+        "kms:GenerateRandom"
       ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
       "Effect": "Allow",
-      "Action": [
-        "route53:ChangeResourceRecordSets",
-        "route53:ListResourceRecordSets",
-        "route53:GetHostedZone"
-      ],
-      "Resource": [
-        "arn:aws:route53:::hostedzone/Z3AFAKE1ZOMORE"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "route53:GetChange"
-      ],
-      "Resource": [
-        "arn:aws:route53:::change/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "route53:ListHostedZones"
-      ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "route53:ListHostedZones"
-      ],
-      "Resource": [
-        "*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecr:GetAuthorizationToken",
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:GetRepositoryPolicy",
-        "ecr:DescribeRepositories",
-        "ecr:ListImages",
-        "ecr:BatchGetImage"
-      ],
-      "Resource": [
-        "*"
-      ]
+      "Resource": "*"
     }
-  ]
+  ],
+  "Version": "2012-10-17"
 }

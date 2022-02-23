@@ -1,12 +1,26 @@
 # Etcd Administration Tasks
 
+## etcd-manager
+
+etcd-manager is a kubernetes-associated project that kOps uses to manage
+etcd.
+
+etcd-manager uses many of the same ideas as the existing etcd implementation
+built into kOps, but it addresses some limitations also:
+
+* separate from kOps - can be used by other projects
+* allows etcd2 -> etcd3 upgrade (along with minor upgrades)
+* allows cluster resizing (e.g. going from 1 to 3 nodes)
+
+When using kubernetes >= 1.12 etcd-manager will be used by default. See [etcd3-migration.md](../etcd3-migration.md) for upgrades from older clusters.
+
 ## Backups
 
-Backups and restores of etcd on kops are covered in [etcd_backup_restore_encryption.md](etcd_backup_restore_encryption.md)
+Backups and restores of etcd on kOps are covered in [etcd_backup_restore_encryption.md](etcd_backup_restore_encryption.md)
 
 ## Direct Data Access
 
-It's not typically necessary to view or manipulate the data inside of etcd directly with etcdctl, because all operations usually go through kubectl commands. However, it can be informative during troubleshooting, or just to understand kubernetes better. Here are the steps to accomplish that on kops.
+It's not typically necessary to view or manipulate the data inside of etcd directly with etcdctl, because all operations usually go through kubectl commands. However, it can be informative during troubleshooting, or just to understand kubernetes better. Here are the steps to accomplish that on kOps.
 
 1\. Connect to an etcd-manager pod
 
@@ -56,7 +70,7 @@ ssh admin@<IP-of-master-node>
 
 in whatever manner you prefer. Here is one example.
 
-```
+```bash
 cd /usr/local
 sudo wget https://dl.google.com/go/go1.13.3.linux-amd64.tar.gz
 sudo tar -xvf go1.13.3.linux-amd64.tar.gz
@@ -71,7 +85,7 @@ which go
 
 3\. Install etcdhelper
 
-```
+```bash
 mkdir -p ~/go/src/github.com/
 cd ~/go/src/github.com/
 git clone https://github.com/openshift/origin openshift
@@ -94,4 +108,3 @@ Other etcdhelper commands are possible, like "ls":
 ```
 sudo etcdhelper -key /etc/kubernetes/pki/kube-apiserver/etcd-client.key -cert /etc/kubernetes/pki/kube-apiserver/etcd-client.crt  -cacert /etc/kubernetes/pki/kube-apiserver/etcd-ca.crt -endpoint https://127.0.0.1:4001 ls
 ```
-

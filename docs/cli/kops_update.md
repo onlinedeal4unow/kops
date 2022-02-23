@@ -5,17 +5,6 @@
 
 Update a cluster.
 
-### Synopsis
-
-Creates or updates cloud resources to match cluster desired configuration.
-
-### Examples
-
-```
-  # After cluster has been created, configure it with:
-  kops update cluster k8s.cluster.site --yes --state=s3://kops-state-1234
-```
-
 ### Options
 
 ```
@@ -25,7 +14,7 @@ Creates or updates cloud resources to match cluster desired configuration.
 ### Options inherited from parent commands
 
 ```
-      --add_dir_header                   If true, adds the file directory to the header
+      --add_dir_header                   If true, adds the file directory to the header of the log messages
       --alsologtostderr                  log to standard error as well as files
       --config string                    yaml config file (default is $HOME/.kops.yaml)
       --log_backtrace_at traceLocation   when logging hits line file:N, emit a stack trace (default :0)
@@ -34,6 +23,7 @@ Creates or updates cloud resources to match cluster desired configuration.
       --log_file_max_size uint           Defines the maximum size a log file can grow to. Unit is megabytes. If the value is 0, the maximum file size is unlimited. (default 1800)
       --logtostderr                      log to standard error instead of files (default true)
       --name string                      Name of cluster. Overrides KOPS_CLUSTER_NAME environment variable
+      --one_output                       If true, only write logs to their native severity level (vs also writing to each lower severity level)
       --skip_headers                     If true, avoid header prefixes in the log messages
       --skip_log_headers                 If true, avoid headers when opening log files
       --state string                     Location of state storage (kops 'config' file). Overrides KOPS_STATE_STORE environment variable
@@ -44,6 +34,6 @@ Creates or updates cloud resources to match cluster desired configuration.
 
 ### SEE ALSO
 
-* [kops](kops.md)	 - kops is Kubernetes ops.
+* [kops](kops.md)	 - kOps is Kubernetes Operations.
 * [kops update cluster](kops_update_cluster.md)	 - Update a cluster.
 

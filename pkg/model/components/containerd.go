@@ -19,7 +19,8 @@ package components
 import (
 	"fmt"
 
-	"k8s.io/klog"
+	"github.com/blang/semver/v4"
+	"github.com/pelletier/go-toml"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/loader"
@@ -43,58 +44,47 @@ func (b *ContainerdOptionsBuilder) BuildOptions(o interface{}) error {
 	containerd := clusterSpec.Containerd
 
 	if clusterSpec.ContainerRuntime == "containerd" {
-		if b.IsKubernetesLT("1.11") {
-			// Containerd 1.2 is validated against Kubernetes v1.11+
-			// https://github.com/containerd/containerd/blob/master/releases/v1.2.0.toml#L34
-			return fmt.Errorf("kubernetes %s is not compatible with containerd", clusterSpec.KubernetesVersion)
-		} else if b.IsKubernetesLT("1.18") {
-			klog.Warningf("kubernetes %s is untested with containerd", clusterSpec.KubernetesVersion)
-		}
-
-		// Set containerd based on Kubernetes version
+		// Set version based on Kubernetes version
 		if fi.StringValue(containerd.Version) == "" {
-			if b.IsKubernetesGTE("1.17") {
-				containerd.Version = fi.String("1.3.3")
-			} else if b.IsKubernetesGTE("1.11") {
-				return fmt.Errorf("containerd version is required")
+			if b.IsKubernetesGTE("1.23") {
+				containerd.Version = fi.String("1.6.0")
+			} else {
+				containerd.Version = fi.String("1.4.12")
 			}
 		}
-
-		// Apply defaults for containerd running in container runtime mode
+		// Set default log level to INFO
 		containerd.LogLevel = fi.String("info")
-		containerd.ConfigOverride = fi.String("")
 
 	} else if clusterSpec.ContainerRuntime == "docker" {
-		if fi.StringValue(containerd.Version) == "" {
-			// Docker version should always be available
-			if fi.StringValue(clusterSpec.Docker.Version) == "" {
-				return fmt.Errorf("docker version is required")
+		// Docker version should always be available
+		dockerVersion := fi.StringValue(clusterSpec.Docker.Version)
+		if dockerVersion == "" {
+			return fmt.Errorf("docker version is required")
+		} else {
+			// Skip containerd setup for older versions without containerd service
+			sv, err := semver.ParseTolerant(dockerVersion)
+			if err != nil {
+				return fmt.Errorf("unable to parse version string: %q", dockerVersion)
 			}
-
-			// Set the containerd version for known Docker versions
-			switch fi.StringValue(clusterSpec.Docker.Version) {
-			case "19.03.8":
-				containerd.Version = fi.String("1.2.13")
-			case "19.03.4":
-				containerd.Version = fi.String("1.2.10")
-			case "18.09.9":
-				containerd.Version = fi.String("1.2.10")
-			case "18.09.3":
-				containerd.Version = fi.String("1.2.4")
-			default:
-				// Old version of docker, single package
+			if sv.LT(semver.MustParse("18.9.0")) {
 				containerd.SkipInstall = true
 				return nil
 			}
 		}
-
-		// Apply defaults for containerd running in Docker mode
+		// Set default log level to INFO
 		containerd.LogLevel = fi.String("info")
-		containerd.ConfigOverride = fi.String("disabled_plugins = [\"cri\"]\n")
+		// Build config file for containerd running in Docker mode
+		config, _ := toml.Load("")
+		config.SetPath([]string{"disabled_plugins"}, []string{"cri"})
+		containerd.ConfigOverride = fi.String(config.String())
 
 	} else {
 		// Unknown container runtime, should not install containerd
 		containerd.SkipInstall = true
+	}
+
+	if containerd.NvidiaGPU != nil && fi.BoolValue(containerd.NvidiaGPU.Enabled) && containerd.NvidiaGPU.DriverPackage == "" {
+		containerd.NvidiaGPU.DriverPackage = "nvidia-headless-460-server"
 	}
 
 	return nil

@@ -31,23 +31,26 @@ func TestLaunchTemplateTerraformRender(t *testing.T) {
 				IAMInstanceProfile: &IAMInstanceProfile{
 					Name: fi.String("nodes"),
 				},
-				ID:                     fi.String("test-11"),
-				InstanceMonitoring:     fi.Bool(true),
-				InstanceType:           fi.String("t2.medium"),
-				SpotPrice:              "0.1",
-				SpotDurationInMinutes:  fi.Int64(60),
-				RootVolumeOptimization: fi.Bool(true),
-				RootVolumeIops:         fi.Int64(100),
-				RootVolumeSize:         fi.Int64(64),
+				ID:                           fi.String("test-11"),
+				InstanceMonitoring:           fi.Bool(true),
+				InstanceType:                 fi.String("t2.medium"),
+				SpotPrice:                    fi.String("0.1"),
+				SpotDurationInMinutes:        fi.Int64(60),
+				InstanceInterruptionBehavior: fi.String("hibernate"),
+				RootVolumeOptimization:       fi.Bool(true),
+				RootVolumeIops:               fi.Int64(100),
+				RootVolumeSize:               fi.Int64(64),
 				SSHKey: &SSHKey{
 					Name:      fi.String("newkey"),
-					PublicKey: fi.WrapResource(fi.NewStringResource("newkey")),
+					PublicKey: fi.NewStringResource("newkey"),
 				},
 				SecurityGroups: []*SecurityGroup{
 					{Name: fi.String("nodes-1"), ID: fi.String("1111")},
 					{Name: fi.String("nodes-2"), ID: fi.String("2222")},
 				},
-				Tenancy: fi.String("dedicated"),
+				Tenancy:                 fi.String("dedicated"),
+				HTTPTokens:              fi.String("optional"),
+				HTTPPutResponseHopLimit: fi.Int64(1),
 			},
 			Expected: `provider "aws" {
   region = "eu-west-2"
@@ -61,8 +64,9 @@ resource "aws_launch_template" "test" {
   instance_market_options {
     market_type = "spot"
     spot_options {
-      block_duration_minutes = 60
-      max_price              = "0.1"
+      block_duration_minutes         = 60
+      instance_interruption_behavior = "hibernate"
+      max_price                      = "0.1"
     }
   }
   instance_type = "t2.medium"
@@ -70,7 +74,15 @@ resource "aws_launch_template" "test" {
   lifecycle {
     create_before_destroy = true
   }
-  name_prefix = "test-"
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 1
+    http_tokens                 = "optional"
+  }
+  monitoring {
+    enabled = true
+  }
+  name = "test"
   network_interfaces {
     associate_public_ip_address = true
     delete_on_termination       = true
@@ -82,7 +94,14 @@ resource "aws_launch_template" "test" {
 }
 
 terraform {
-  required_version = ">= 0.12.0"
+  required_version = ">= 0.15.0"
+  required_providers {
+    aws = {
+      "configuration_aliases" = [aws.files]
+      "source"                = "hashicorp/aws"
+      "version"               = ">= 3.71.0"
+    }
+  }
 }
 `,
 		},
@@ -115,7 +134,9 @@ terraform {
 					{Name: fi.String("nodes-1"), ID: fi.String("1111")},
 					{Name: fi.String("nodes-2"), ID: fi.String("2222")},
 				},
-				Tenancy: fi.String("dedicated"),
+				Tenancy:                 fi.String("dedicated"),
+				HTTPTokens:              fi.String("required"),
+				HTTPPutResponseHopLimit: fi.Int64(5),
 			},
 			Expected: `provider "aws" {
   region = "eu-west-2"
@@ -140,7 +161,15 @@ resource "aws_launch_template" "test" {
   lifecycle {
     create_before_destroy = true
   }
-  name_prefix = "test-"
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 5
+    http_tokens                 = "required"
+  }
+  monitoring {
+    enabled = true
+  }
+  name = "test"
   network_interfaces {
     associate_public_ip_address = true
     delete_on_termination       = true
@@ -152,7 +181,14 @@ resource "aws_launch_template" "test" {
 }
 
 terraform {
-  required_version = ">= 0.12.0"
+  required_version = ">= 0.15.0"
+  required_providers {
+    aws = {
+      "configuration_aliases" = [aws.files]
+      "source"                = "hashicorp/aws"
+      "version"               = ">= 3.71.0"
+    }
+  }
 }
 `,
 		},

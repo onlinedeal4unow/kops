@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/model"
 	"k8s.io/kops/pkg/model/defaults"
@@ -28,6 +28,7 @@ import (
 	nodeidentitygce "k8s.io/kops/pkg/nodeidentity/gce"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
+	"k8s.io/kops/upup/pkg/fi/cloudup/gce/gcemetadata"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gcetasks"
 )
 
@@ -40,29 +41,32 @@ const (
 type AutoscalingGroupModelBuilder struct {
 	*GCEModelContext
 
-	BootstrapScript *model.BootstrapScript
-	Lifecycle       *fi.Lifecycle
+	BootstrapScriptBuilder *model.BootstrapScriptBuilder
+	Lifecycle              fi.Lifecycle
 }
 
 var _ fi.ModelBuilder = &AutoscalingGroupModelBuilder{}
 
-func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
-	for _, ig := range b.InstanceGroups {
+// Build the GCE instance template object for an InstanceGroup
+// We are then able to extract out the fields when running with the clusterapi.
+func (b *AutoscalingGroupModelBuilder) buildInstanceTemplate(c *fi.ModelBuilderContext, ig *kops.InstanceGroup, subnet *kops.ClusterSubnetSpec) (*gcetasks.InstanceTemplate, error) {
+	// Indented to keep diff manageable
+	// TODO: Remove spurious indent
+	{
+		var err error
 		name := b.SafeObjectName(ig.ObjectMeta.Name)
 
-		startupScript, err := b.BootstrapScript.ResourceNodeUp(ig, b.Cluster)
+		startupScript, err := b.BootstrapScriptBuilder.ResourceNodeUp(c, ig)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
-		// InstanceTemplate
-		var instanceTemplate *gcetasks.InstanceTemplate
 		{
 			volumeSize := fi.Int32Value(ig.Spec.RootVolumeSize)
 			if volumeSize == 0 {
 				volumeSize, err = defaults.DefaultInstanceGroupVolumeSize(ig.Spec.Role)
 				if err != nil {
-					return err
+					return nil, err
 				}
 			}
 			volumeType := fi.StringValue(ig.Spec.RootVolumeType)
@@ -84,22 +88,29 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 				// TODO: Support preemptible nodes?
 				Preemptible: fi.Bool(false),
 
+				HasExternalIP: fi.Bool(b.Cluster.Spec.Topology.Masters == kops.TopologyPublic),
+
 				Scopes: []string{
 					"compute-rw",
 					"monitoring",
 					"logging-write",
 				},
-				Metadata: map[string]*fi.ResourceHolder{
+				Metadata: map[string]fi.Resource{
 					"startup-script": startupScript,
 					//"config": resources/config.yaml $nodeset.Name
-					"cluster-name": fi.WrapResource(fi.NewStringResource(b.ClusterName())),
-					nodeidentitygce.MetadataKeyInstanceGroupName: fi.WrapResource(fi.NewStringResource(ig.Name)),
+					gcemetadata.MetadataKeyClusterName:           fi.NewStringResource(b.ClusterName()),
+					nodeidentitygce.MetadataKeyInstanceGroupName: fi.NewStringResource(ig.Name),
 				},
 			}
 
-			storagePaths, err := iam.WriteableVFSPaths(b.Cluster, ig.Spec.Role)
+			nodeRole, err := iam.BuildNodeRoleSubject(ig.Spec.Role, false)
 			if err != nil {
-				return err
+				return nil, err
+			}
+
+			storagePaths, err := iam.WriteableVFSPaths(b.Cluster, nodeRole)
+			if err != nil {
+				return nil, err
 			}
 			if len(storagePaths) == 0 {
 				t.Scopes = append(t.Scopes, "storage-ro")
@@ -114,7 +125,7 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 					gFmtKeys = append(gFmtKeys, fmt.Sprintf("%s: %s", fi.SecretNameSSHPrimary, key))
 				}
 
-				t.Metadata["ssh-keys"] = fi.WrapResource(fi.NewStringResource(strings.Join(gFmtKeys, "\n")))
+				t.Metadata["ssh-keys"] = fi.NewStringResource(strings.Join(gFmtKeys, "\n"))
 			}
 
 			switch ig.Spec.Role {
@@ -127,6 +138,12 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			case kops.InstanceGroupRoleNode:
 				t.Tags = append(t.Tags, b.GCETagForRole(kops.InstanceGroupRoleNode))
 			}
+			roleLabel := gce.GceLabelNameRolePrefix + gce.EncodeGCELabel(strings.ToLower(string(ig.Spec.Role)))
+			t.Labels = map[string]string{
+				gce.GceLabelNameKubernetesCluster: gce.SafeClusterName(b.ClusterName()),
+				roleLabel:                         "",
+				gce.GceLabelNameInstanceGroup:     name,
+			}
 
 			if gce.UsesIPAliases(b.Cluster) {
 				t.CanIPForward = fi.Bool(false)
@@ -134,37 +151,32 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 				t.AliasIPRanges = map[string]string{
 					b.NameForIPAliasRange("pods"): "/24",
 				}
-				t.Subnet = b.LinkToIPAliasSubnet()
 			} else {
 				t.CanIPForward = fi.Bool(true)
 			}
+			t.Subnet = b.LinkToSubnet(subnet)
 
-			if b.Cluster.Spec.GCEServiceAccount != "" {
-				klog.Infof("VMs using Service Account: %v", b.Cluster.Spec.GCEServiceAccount)
-				// b.Cluster.Spec.GCEServiceAccount = c.GCEServiceAccount
-			} else {
-				klog.Warning("VMs will be configured to use the GCE default compute Service Account! This is an anti-pattern")
-				klog.Warning("Use a pre-created Service Account with the flag: --gce-service-account=account@projectname.iam.gserviceaccount.com")
-				b.Cluster.Spec.GCEServiceAccount = "default"
-			}
+			t.ServiceAccounts = append(t.ServiceAccounts, b.LinkToServiceAccount(ig))
 
-			klog.Infof("gsa: %v", b.Cluster.Spec.GCEServiceAccount)
-			t.ServiceAccounts = []string{b.Cluster.Spec.GCEServiceAccount}
 			//labels, err := b.CloudTagsForInstanceGroup(ig)
 			//if err != nil {
 			//	return fmt.Errorf("error building cloud tags: %v", err)
 			//}
 			//t.Labels = labels
 
-			c.AddTask(t)
-
-			instanceTemplate = t
+			return t, nil
 		}
+	}
+}
 
+func (b *AutoscalingGroupModelBuilder) splitToZones(ig *kops.InstanceGroup) (map[string]int, error) {
+	// Indented to keep diff manageable
+	// TODO: Remove spurious indent
+	{
 		// AutoscalingGroup
 		zones, err := b.FindZonesForInstanceGroup(ig)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// TODO: Duplicated from aws - move to defaults?
@@ -201,9 +213,41 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 			}
 		}
 
-		for i, targetSize := range targetSizes {
-			zone := zones[i]
+		instanceCountByZone := make(map[string]int)
+		for i, zone := range zones {
+			instanceCountByZone[zone] = targetSizes[i]
+		}
+		return instanceCountByZone, nil
+	}
+}
 
+func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
+	for _, ig := range b.InstanceGroups {
+		subnets, err := b.GatherSubnets(ig)
+		if err != nil {
+			return err
+		}
+
+		// On GCE, instance groups cannot have multiple subnets.
+		// Because subnets are regional on GCE, this should not be limiting.
+		// (IGs can in theory support multiple zones, but in practice we don't recommend this)
+		if len(subnets) != 1 {
+			return fmt.Errorf("instanceGroup %q has multiple subnets", ig.Name)
+		}
+		subnet := subnets[0]
+
+		instanceTemplate, err := b.buildInstanceTemplate(c, ig, subnet)
+		if err != nil {
+			return err
+		}
+		c.AddTask(instanceTemplate)
+
+		instanceCountByZone, err := b.splitToZones(ig)
+		if err != nil {
+			return err
+		}
+
+		for zone, targetSize := range instanceCountByZone {
 			name := gce.NameForInstanceGroupManager(b.Cluster, ig, zone)
 
 			t := &gcetasks.InstanceGroupManager{
@@ -225,14 +269,6 @@ func (b *AutoscalingGroupModelBuilder) Build(c *fi.ModelBuilderContext) error {
 
 			c.AddTask(t)
 		}
-
-		//{{ if HasTag "_master_lb" }}
-		//# Attach ASG to ELB
-		//loadBalancerAttachment/masters.{{ $m.Name }}.{{ SafeClusterName }}:
-		//loadBalancer: loadBalancer/api.{{ ClusterName }}
-		//autoscalingGroup: autoscalingGroup/{{ $m.Name }}.{{ ClusterName }}
-		//{{ end }}
-
 	}
 
 	return nil

@@ -1,13 +1,17 @@
 # Kubernetes Upgrade Recommended
 
 Kops has established a deprecation policy for Kubernetes version support.
-Kops will drop support for Kubernetes versions as follows:
+Kops will remove support for Kubernetes versions as follows:
 
-| kops version | Drops support for Kubernetes version |
-|--------------|--------------------------------------|
-| 1.18         | 1.8 and below                        |
-| 1.19         | 1.9 and 1.10                         |
-
+| kOps version | Removes support for Kubernetes version |
+|--------------|----------------------------------------|
+| 1.18         | 1.8 and below                          |
+| 1.19         | 1.9 and 1.10                           |
+| 1.20         | 1.11 and 1.12                          |
+| 1.21         | 1.13 and 1.14                          |
+| 1.22         | 1.15 and 1.16                          |
+| 1.23         | 1.17                                   |
+| 1.24         | 1.18                                   |
 
 You are running a version of kubernetes that we recommend upgrading.
 

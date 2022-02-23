@@ -20,18 +20,16 @@ import (
 	"fmt"
 	"strings"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider"
 	"k8s.io/kops/dnsprovider/pkg/dnsprovider/providers/aws/route53"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/upup/pkg/fi"
-	"k8s.io/kops/upup/pkg/fi/cloudup/aliup"
 	"k8s.io/kops/upup/pkg/fi/cloudup/awsup"
-	"k8s.io/kops/upup/pkg/fi/cloudup/baremetal"
+	"k8s.io/kops/upup/pkg/fi/cloudup/azure"
 	"k8s.io/kops/upup/pkg/fi/cloudup/do"
 	"k8s.io/kops/upup/pkg/fi/cloudup/gce"
 	"k8s.io/kops/upup/pkg/fi/cloudup/openstack"
-	"k8s.io/kops/upup/pkg/fi/cloudup/vsphere"
 )
 
 func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
@@ -96,14 +94,6 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			}
 			cloud = awsCloud
 		}
-	case kops.CloudProviderVSphere:
-		{
-			vsphereCloud, err := vsphere.NewVSphereCloud(&cluster.Spec)
-			if err != nil {
-				return nil, err
-			}
-			cloud = vsphereCloud
-		}
 	case kops.CloudProviderDO:
 		{
 			// for development purposes we're going to assume
@@ -118,24 +108,10 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			cloud = doCloud
 		}
 
-	case kops.CloudProviderBareMetal:
-		{
-			// TODO: Allow dns provider to be specified
-			dns, err := dnsprovider.GetDnsProvider(route53.ProviderName, nil)
-			if err != nil {
-				return nil, fmt.Errorf("Error building (k8s) DNS provider: %v", err)
-			}
-
-			baremetalCloud, err := baremetal.NewCloud(dns)
-			if err != nil {
-				return nil, err
-			}
-			cloud = baremetalCloud
-		}
 	case kops.CloudProviderOpenstack:
 		{
 			cloudTags := map[string]string{openstack.TagClusterName: cluster.ObjectMeta.Name}
-			osc, err := openstack.NewOpenstackCloud(cloudTags, &cluster.Spec)
+			osc, err := openstack.NewOpenstackCloud(cloudTags, &cluster.Spec, "build-cloud")
 			if err != nil {
 				return nil, err
 			}
@@ -149,20 +125,25 @@ func BuildCloud(cluster *kops.Cluster) (fi.Cloud, error) {
 			cloud = osc
 		}
 
-	case kops.CloudProviderALI:
+	case kops.CloudProviderAzure:
 		{
-			region, err := aliup.FindRegion(cluster)
+			for _, subnet := range cluster.Spec.Subnets {
+				if subnet.Region != "" {
+					region = subnet.Region
+				}
+			}
+			if region == "" {
+				return nil, fmt.Errorf("on Azure, subnets must include Regions")
+			}
+
+			cloudTags := map[string]string{azure.TagClusterName: cluster.ObjectMeta.Name}
+
+			azureCloud, err := azure.NewAzureCloud(cluster.Spec.CloudConfig.Azure.SubscriptionID, region, cloudTags)
 			if err != nil {
 				return nil, err
 			}
 
-			cloudTags := map[string]string{aliup.TagClusterName: cluster.ObjectMeta.Name}
-			aliCloud, err := aliup.NewALICloud(region, cloudTags)
-			if err != nil {
-				return nil, err
-			}
-
-			cloud = aliCloud
+			cloud = azureCloud
 		}
 	default:
 		return nil, fmt.Errorf("unknown CloudProvider %q", cluster.Spec.CloudProvider)
@@ -235,8 +216,8 @@ func FindDNSHostedZone(dns dnsprovider.Interface, clusterDNSName string, dnsType
 		// We make this an error because you have to set up DNS delegation anyway
 		tokens := strings.Split(clusterDNSName, ".")
 		suffix := strings.Join(tokens[len(tokens)-2:], ".")
-		//klog.Warningf("No matching hosted zones found; will created %q", suffix)
-		//return suffix, nil
+		// klog.Warningf("No matching hosted zones found; will created %q", suffix)
+		// return suffix, nil
 		return "", fmt.Errorf("No matching hosted zones found for %q; please create one (e.g. %q) first", clusterDNSName, suffix)
 	}
 

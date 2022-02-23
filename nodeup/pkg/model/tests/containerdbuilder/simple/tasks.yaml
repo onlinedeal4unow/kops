@@ -1,9 +1,124 @@
-contents: ""
+contents: |
+  {
+      "cniVersion": "0.4.0",
+      "name": "k8s-pod-network",
+      "plugins": [
+          {
+              "type": "ptp",
+              "ipam": {
+                  "type": "host-local",
+                  "ranges": [[{"subnet": "{{.PodCIDR}}"}]],
+                  "routes": [{ "dst": "0.0.0.0/0" }]
+              }
+          },
+          {
+              "type": "portmap",
+              "capabilities": {"portMappings": true}
+          }
+      ]
+  }
+path: /etc/containerd/config-cni.template
+type: file
+---
+contents: |
+  version = 2
+
+  [plugins]
+
+    [plugins."io.containerd.grpc.v1.cri"]
+      sandbox_image = "k8s.gcr.io/pause:3.6"
+
+      [plugins."io.containerd.grpc.v1.cri".cni]
+        conf_template = "/etc/containerd/config-cni.template"
+
+      [plugins."io.containerd.grpc.v1.cri".containerd]
+
+        [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+            runtime_type = "io.containerd.runc.v2"
+
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+              SystemdCgroup = false
 path: /etc/containerd/config-kops.toml
 type: file
 ---
-contents: CONTAINERD_OPTS=
+contents: |2
+
+  runtime-endpoint: unix:///run/containerd/containerd.sock
+path: /etc/crictl.yaml
+type: file
+---
+contents: CONTAINERD_OPTS=--log-level=info
 path: /etc/sysconfig/containerd
+type: file
+---
+contents: |
+  #!/bin/bash
+  # Built by kOps - do not edit
+
+  iptables -w -t nat -N IP-MASQ
+  iptables -w -t nat -A POSTROUTING -m comment --comment "ip-masq: ensure nat POSTROUTING directs all non-LOCAL destination traffic to our custom IP-MASQ chain" -m addrtype ! --dst-type LOCAL -j IP-MASQ
+  iptables -w -t nat -A IP-MASQ -d 100.64.0.0/10 -m comment --comment "ip-masq: pod cidr is not subject to MASQUERADE" -j RETURN
+  iptables -w -t nat -A IP-MASQ -m comment --comment "ip-masq: outbound traffic is subject to MASQUERADE (must be last in chain)" -j MASQUERADE
+mode: "0755"
+path: /opt/kops/bin/cni-iptables-setup
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/containerd
+    Key: containerd
+mode: "0755"
+path: /usr/bin/containerd
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/containerd-shim
+    Key: containerd-shim
+mode: "0755"
+path: /usr/bin/containerd-shim
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/containerd-shim-runc-v1
+    Key: containerd-shim-runc-v1
+mode: "0755"
+path: /usr/bin/containerd-shim-runc-v1
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/containerd-shim-runc-v2
+    Key: containerd-shim-runc-v2
+mode: "0755"
+path: /usr/bin/containerd-shim-runc-v2
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/containerd-stress
+    Key: containerd-stress
+mode: "0755"
+path: /usr/bin/containerd-stress
+type: file
+---
+contents:
+  Asset:
+    AssetPath: bin/ctr
+    Key: ctr
+mode: "0755"
+path: /usr/bin/ctr
+type: file
+---
+contents:
+  Asset:
+    AssetPath: https://github.com/opencontainers/runc/releases/download/v1.1.0/runc.amd64
+    Key: runc.amd64
+mode: "0755"
+path: /usr/sbin/runc
 type: file
 ---
 contents: |2
@@ -202,11 +317,24 @@ contents: |2
 path: /usr/share/doc/containerd/apache.txt
 type: file
 ---
-Name: containerd.io
-hash: b64e7170d9176bc38967b2e12147c69b65bdd0fc
-preventStart: true
-source: https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/containerd.io_1.2.10-3_amd64.deb
-version: 1.2.10-3
+Name: cni-iptables-setup.service
+definition: |
+  [Unit]
+  Description=Configure iptables for kubernetes CNI
+  Documentation=https://github.com/kubernetes/kops
+  Before=network.target
+
+  [Service]
+  Type=oneshot
+  RemainAfterExit=yes
+  ExecStart=/opt/kops/bin/cni-iptables-setup
+
+  [Install]
+  WantedBy=basic.target
+enabled: true
+manageState: true
+running: true
+smartRestart: true
 ---
 Name: containerd.service
 definition: |
@@ -220,15 +348,16 @@ definition: |
   EnvironmentFile=/etc/environment
   ExecStartPre=-/sbin/modprobe overlay
   ExecStart=/usr/bin/containerd -c /etc/containerd/config-kops.toml "$CONTAINERD_OPTS"
-  Restart=always
-  RestartSec=5
+  Type=notify
   Delegate=yes
   KillMode=process
-  OOMScoreAdjust=-999
-  LimitNOFILE=1048576
+  Restart=always
+  RestartSec=5
   LimitNPROC=infinity
   LimitCORE=infinity
+  LimitNOFILE=infinity
   TasksMax=infinity
+  OOMScoreAdjust=-999
 
   [Install]
   WantedBy=multi-user.target

@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 /*
@@ -23,9 +24,11 @@ import (
 	"os"
 	"syscall"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
+// EnsureFileOwner will set the owner & group for a file.
+// Empty values for owner/group will leave the owner/group unchanged.
 func EnsureFileOwner(destPath string, owner string, groupName string) (bool, error) {
 	changed := false
 	stat, err := os.Lstat(destPath)
@@ -36,7 +39,7 @@ func EnsureFileOwner(destPath string, owner string, groupName string) (bool, err
 	actualUserID := int(stat.Sys().(*syscall.Stat_t).Uid)
 	userID := actualUserID
 	if owner != "" {
-		user, err := LookupUser(owner) //user.Lookup(owner)
+		user, err := LookupUser(owner) // user.Lookup(owner)
 		if err != nil {
 			return changed, fmt.Errorf("error looking up user %q: %v", owner, err)
 		}

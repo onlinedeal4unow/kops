@@ -19,19 +19,21 @@ package model
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
-	"strconv"
+	"path/filepath"
+	"regexp"
 	"strings"
 
-	"k8s.io/klog"
-	"k8s.io/kops/nodeup/pkg/distros"
+	"github.com/blang/semver/v4"
+
+	"k8s.io/klog/v2"
 	"k8s.io/kops/nodeup/pkg/model/resources"
 	"k8s.io/kops/pkg/apis/kops"
 	"k8s.io/kops/pkg/flagbuilder"
 	"k8s.io/kops/pkg/systemd"
 	"k8s.io/kops/upup/pkg/fi"
 	"k8s.io/kops/upup/pkg/fi/nodeup/nodetasks"
+	"k8s.io/kops/util/pkg/distributions"
 )
 
 // DockerBuilder install docker (just the packages at the moment)
@@ -40,564 +42,6 @@ type DockerBuilder struct {
 }
 
 var _ fi.ModelBuilder = &DockerBuilder{}
-
-var dockerVersions = []packageVersion{
-	// 17.03.2 - k8s 1.8
-
-	// 17.03.2 - Debian9 (stretch)
-	{
-		PackageVersion: "17.03.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.03.2~ce-0~debian-stretch",
-		Source:         "http://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_17.03.2~ce-0~debian-stretch_amd64.deb",
-		Hash:           "36773361cf44817371770cb4e6e6823590d10297",
-		MarkImmutable:  []string{"/usr/bin/docker-runc"},
-	},
-
-	// 17.03.2 - Jessie
-	{
-		PackageVersion: "17.03.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.03.2~ce-0~debian-jessie",
-		Source:         "http://download.docker.com/linux/debian/dists/jessie/pool/stable/amd64/docker-ce_17.03.2~ce-0~debian-jessie_amd64.deb",
-		Hash:           "a7ac54aaa7d33122ca5f7a2df817cbefb5cdbfc7",
-		MarkImmutable:  []string{"/usr/bin/docker-runc"},
-	},
-
-	// 17.03.2 - Jessie on ARM
-	{
-		PackageVersion: "17.03.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureArm},
-		Version:        "17.03.2~ce-0~debian-jessie",
-		Source:         "http://download.docker.com/linux/debian/dists/jessie/pool/stable/armhf/docker-ce_17.03.2~ce-0~debian-jessie_armhf.deb",
-		Hash:           "71e425b83ce0ef49d6298d61e61c4efbc76b9c65",
-		MarkImmutable:  []string{"/usr/bin/docker-runc"},
-	},
-
-	// 17.03.2 - Xenial
-	{
-		PackageVersion: "17.03.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.03.2~ce-0~ubuntu-xenial",
-		Source:         "http://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_17.03.2~ce-0~ubuntu-xenial_amd64.deb",
-		Hash:           "4dcee1a05ec592e8a76e53e5b464ea43085a2849",
-		MarkImmutable:  []string{"/usr/bin/docker-runc"},
-	},
-
-	// 17.03.2 - Ubuntu Bionic via binary download (no packages available)
-	{
-		PackageVersion: "17.03.2",
-		PlainBinary:    true,
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Source:         "http://download.docker.com/linux/static/stable/x86_64/docker-17.03.2-ce.tgz",
-		Hash:           "141716ae046016a1792ce232a0f4c8eed7fe37d1",
-		MarkImmutable:  []string{"/usr/bin/docker-runc"},
-	},
-
-	// 17.03.2 - Centos / Rhel7 (two packages)
-	{
-		PackageVersion: "17.03.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.03.2.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-17.03.2.ce-1.el7.centos.x86_64.rpm",
-		Hash:           "494ca888f5b1553f93b9d9a5dad4a67f76cf9eb5",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-selinux": {
-				Version: "17.03.2.ce",
-				Source:  "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-selinux-17.03.2.ce-1.el7.centos.noarch.rpm",
-				Hash:    "4659c937b66519c88ef2a82a906bb156db29d191",
-			},
-		},
-		MarkImmutable: []string{"/usr/bin/docker-runc"},
-	},
-	// 17.09.0 - k8s 1.8
-
-	// 17.09.0 - Jessie
-	{
-		PackageVersion: "17.09.0",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.09.0~ce-0~debian",
-		Source:         "http://download.docker.com/linux/debian/dists/jessie/pool/stable/amd64/docker-ce_17.09.0~ce-0~debian_amd64.deb",
-		Hash:           "430ba87f8aa36fedcac1a48e909cbe1830b53845",
-	},
-
-	// 17.09.0 - Jessie on ARM
-	{
-		PackageVersion: "17.09.0",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureArm},
-		Version:        "17.09.0~ce-0~debian",
-		Source:         "http://download.docker.com/linux/debian/dists/jessie/pool/stable/armhf/docker-ce_17.09.0~ce-0~debian_armhf.deb",
-		Hash:           "5001a1defec7c33aa58ddebbd3eae6ebb5f36479",
-	},
-
-	// 17.09.0 - Debian9 (stretch)
-	{
-		PackageVersion: "17.09.0",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.09.0~ce-0~debian",
-		Source:         "http://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_17.09.0~ce-0~debian_amd64.deb",
-		Hash:           "70aa5f96cf00f11374b6593ccf4ed120a65375d2",
-	},
-
-	// 17.09.0 - Xenial
-	{
-		PackageVersion: "17.09.0",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.09.0~ce-0~ubuntu",
-		Source:         "http://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_17.09.0~ce-0~ubuntu_amd64.deb",
-		Hash:           "94f6e89be6d45d9988269a237eb27c7d6a844d7f",
-	},
-
-	// 18.06.2 - Xenial
-	{
-		PackageVersion: "18.06.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.2~ce~3-0~ubuntu",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_18.06.2~ce~3-0~ubuntu_amd64.deb",
-		Hash:           "03e5eaae9c84b144e1140d9b418e43fce0311892",
-	},
-
-	// 18.06.3 - Xenial
-	{
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3~ce~3-0~ubuntu",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_18.06.3~ce~3-0~ubuntu_amd64.deb",
-		Hash:           "c06eda4e934cce6a7941a6af6602d4315b500a22",
-	},
-
-	// 17.09.0 - Centos / Rhel7 (two packages)
-	{
-		PackageVersion: "17.09.0",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "17.09.0.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-17.09.0.ce-1.el7.centos.x86_64.rpm",
-		Hash:           "b4ce72e80ff02926de943082821bbbe73958f87a",
-	},
-
-	// 18.03.1 - Bionic
-	{
-		PackageVersion: "18.03.1",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.03.1~ce~3-0~ubuntu",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce_18.03.1~ce~3-0~ubuntu_amd64.deb",
-		Hash:           "b55b32bd0e9176dd32b1e6128ad9fda10a65cc8b",
-	},
-
-	// 18.06.2 - Bionic
-	{
-		PackageVersion: "18.06.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.2~ce~3-0~ubuntu",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce_18.06.2~ce~3-0~ubuntu_amd64.deb",
-		Hash:           "9607c67644e3e1ad9661267c99499004f2e84e05",
-	},
-
-	// 18.06.1 - Debian Stretch
-	{
-		PackageVersion: "18.06.1",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.1~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_18.06.1~ce~3-0~debian_amd64.deb",
-		Hash:           "18473b80e61b6d4eb8b52d87313abd71261287e5",
-	},
-
-	// 18.06.2 - Debian Stretch
-	{
-
-		PackageVersion: "18.06.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.2~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_18.06.2~ce~3-0~debian_amd64.deb",
-		Hash:           "aad1efd2c90725034e996c6a368ccc2bf41ca5b8",
-	},
-
-	// 18.06.3 - Debian Buster
-	{
-
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian10},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/buster/pool/stable/amd64/docker-ce_18.06.3~ce~3-0~debian_amd64.deb",
-		Hash:           "05c9b098437bcf1b489c2a3a9764c3b779af7bc4",
-	},
-
-	// 18.06.2 - Jessie
-	{
-		PackageVersion: "18.06.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.2~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/jessie/pool/stable/amd64/docker-ce_18.06.2~ce~3-0~debian_amd64.deb",
-		Hash:           "1a2500311230aff37aa81dd1292a88302fb0a2e1",
-	},
-
-	// 18.06.1 - CentOS / Rhel7 (two packages)
-	{
-		PackageVersion: "18.06.1",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.1.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.06.1.ce-3.el7.x86_64.rpm",
-		Hash:           "0a1325e570c5e54111a79623c9fd0c0c714d3a11",
-	},
-
-	// 18.09.3 - Debian Stretch
-	{
-		PackageVersion: "18.09.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:18.09.3~3-0~debian-stretch",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_18.09.3~3-0~debian-stretch_amd64.deb",
-		Hash:           "009b9a2d8bfaa97c74773fe4ec25b6bb396b10d0",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:18.09.3~3-0~debian-stretch",
-				Source:  "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce-cli_18.09.3~3-0~debian-stretch_amd64.deb",
-				Hash:    "557f868ec63e5251639ebd1d8669eb0c61dd555c",
-			},
-		},
-	},
-
-	// 18.06.2 - CentOS / Rhel7 (two packages)
-	{
-		PackageVersion: "18.06.2",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.2.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.06.2.ce-3.el7.x86_64.rpm",
-		Hash:           "456eb7c5bfb37fac342e9ade21b602c076c5b367",
-	},
-
-	// 18.06.3 (contains fix for CVE-2019-5736)
-
-	// 18.06.3 - Bionic
-	{
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3~ce~3-0~ubuntu",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce_18.06.3~ce~3-0~ubuntu_amd64.deb",
-		Hash:           "b396678a8b70f0503a7b944fa6e3297ab27b345b",
-	},
-
-	// 18.06.3 - Debian Stretch
-	{
-
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_18.06.3~ce~3-0~debian_amd64.deb",
-		Hash:           "93b5a055a39462867d79109b00db1367e3d9e32f",
-	},
-
-	// 18.06.3 - Jessie
-	{
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionJessie},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3~ce~3-0~debian",
-		Source:         "https://download.docker.com/linux/debian/dists/jessie/pool/stable/amd64/docker-ce_18.06.3~ce~3-0~debian_amd64.deb",
-		Hash:           "058bcd4b055560866b8cad978c7aa224694602da",
-	},
-
-	// 18.06.3 - CentOS / Rhel7 (two packages)
-	{
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.06.3.ce-3.el7.x86_64.rpm",
-		Hash:           "5369602f88406d4fb9159dc1d3fd44e76fb4cab8",
-	},
-	// 18.06.3 - CentOS / Rhel8 (two packages)
-	{
-		PackageVersion: "18.06.3",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel8, distros.DistributionCentos8},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.06.3.ce",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.06.3.ce-3.el7.x86_64.rpm",
-		Hash:           "5369602f88406d4fb9159dc1d3fd44e76fb4cab8",
-	},
-
-	// 18.09.9 - k8s 1.14 - https://github.com/kubernetes/kubernetes/pull/72823
-
-	// 18.09.9 - Debian Stretch
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:18.09.9~3-0~debian-stretch",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_18.09.9~3-0~debian-stretch_amd64.deb",
-		Hash:           "9d564b56f5531a08e24c8c7724445d128742572e",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:18.09.9~3-0~debian-stretch",
-				Source:  "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce-cli_18.09.9~3-0~debian-stretch_amd64.deb",
-				Hash:    "88f8f3103d2e5011e2f1a73b9e6dbf03d6e6698a",
-			},
-		},
-	},
-
-	// 18.09.9 - Debian Buster
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian10},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:18.09.9~3-0~debian-buster",
-		Source:         "https://download.docker.com/linux/debian/dists/buster/pool/stable/amd64/docker-ce_18.09.9~3-0~debian-buster_amd64.deb",
-		Hash:           "97620eede9ca9fd379eef41b9d14347fe1d82ded",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:18.09.9~3-0~debian-buster",
-				Source:  "https://download.docker.com/linux/debian/dists/buster/pool/stable/amd64/docker-ce-cli_18.09.9~3-0~debian-buster_amd64.deb",
-				Hash:    "510eee5b6884867be0d2b360f8ff8cf7f0c0d11a",
-			},
-		},
-	},
-
-	// 18.09.9 - Xenial
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:18.09.9~3-0~ubuntu-xenial",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_18.09.9~3-0~ubuntu-xenial_amd64.deb",
-		Hash:           "959a1193ff148cbf98c357e096dafca44f497520",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:18.09.9~3-0~ubuntu-xenial",
-				Source:  "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce-cli_18.09.9~3-0~ubuntu-xenial_amd64.deb",
-				Hash:    "b79b8958f041249bbff0afbfeded794a9e42463f",
-			},
-		},
-	},
-
-	// 18.09.9 - Bionic
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:18.09.9~3-0~ubuntu-bionic",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce_18.09.9~3-0~ubuntu-bionic_amd64.deb",
-		Hash:           "edabe6602521927b6e9ad70fc7650329333b51a3",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:18.09.9~3-0~ubuntu-bionic",
-				Source:  "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce-cli_18.09.9~3-0~ubuntu-bionic_amd64.deb",
-				Hash:    "bca089a50ea22f02abe88f68d7ca35c26be9967b",
-			},
-		},
-	},
-
-	// 18.09.9 - CentOS / Rhel7
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.09.9",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.09.9-3.el7.x86_64.rpm",
-		Hash:           "0b656dcdbddfc231f871ae78e3f5ac76716b5914",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "18.09.9",
-				Source:  "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-cli-18.09.9-3.el7.x86_64.rpm",
-				Hash:    "0c51b1339a95bd732ca305f07b7bcc95f132b9c8",
-			},
-		},
-	},
-
-	// 18.09.9 - CentOS / Rhel8
-	{
-		PackageVersion: "18.09.9",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel8, distros.DistributionCentos8},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "18.09.9",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-18.09.9-3.el7.x86_64.rpm",
-		Hash:           "0b656dcdbddfc231f871ae78e3f5ac76716b5914",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "18.09.9",
-				Source:  "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-cli-18.09.9-3.el7.x86_64.rpm",
-				Hash:    "0c51b1339a95bd732ca305f07b7bcc95f132b9c8",
-			},
-		},
-	},
-
-	// 19.03.4 - k8s 1.17 - https://github.com/kubernetes/kubernetes/pull/84476
-
-	// 19.03.4 - Debian Stretch
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian9},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:19.03.4~3-0~debian-stretch",
-		Source:         "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce_19.03.4~3-0~debian-stretch_amd64.deb",
-		Hash:           "2b8dcb2d75334fab29242ac069d1fbcfb65e88e3",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:19.03.4~3-0~debian-stretch",
-				Source:  "https://download.docker.com/linux/debian/dists/stretch/pool/stable/amd64/docker-ce-cli_19.03.4~3-0~debian-stretch_amd64.deb",
-				Hash:    "57f71ee764abb19a0b4c580ff14b1eb3de3a9e08",
-			},
-		},
-	},
-
-	// 19.03.4 - Debian Buster
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionDebian10},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:19.03.4~3-0~debian-buster",
-		Source:         "https://download.docker.com/linux/debian/dists/buster/pool/stable/amd64/docker-ce_19.03.4~3-0~debian-buster_amd64.deb",
-		Hash:           "492a70f29ceffd315ee9712b33004491c6f59e49",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:19.03.4~3-0~debian-buster",
-				Source:  "https://download.docker.com/linux/debian/dists/buster/pool/stable/amd64/docker-ce-cli_19.03.4~3-0~debian-buster_amd64.deb",
-				Hash:    "2549a364f0e5ce489c79b292b78e349751385dd5",
-			},
-		},
-	},
-
-	// 19.03.4 - Xenial
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionXenial},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:19.03.4~3-0~ubuntu-xenial",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce_19.03.4~3-0~ubuntu-xenial_amd64.deb",
-		Hash:           "d9f5855413a5efcca4e756613dafb744b6cae8d2",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:19.03.4~3-0~ubuntu-xenial",
-				Source:  "https://download.docker.com/linux/ubuntu/dists/xenial/pool/stable/amd64/docker-ce-cli_19.03.4~3-0~ubuntu-xenial_amd64.deb",
-				Hash:    "3e0164dfef612b533c12dec6cd39da93bedd7e8c",
-			},
-		},
-	},
-
-	// 19.03.4 - Bionic
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionBionic},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "5:19.03.4~3-0~ubuntu-bionic",
-		Source:         "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce_19.03.4~3-0~ubuntu-bionic_amd64.deb",
-		Hash:           "ee640d9258fd4d3f4c7017ab2a71da63cbbead55",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "5:19.03.4~3-0~ubuntu-bionic",
-				Source:  "https://download.docker.com/linux/ubuntu/dists/bionic/pool/stable/amd64/docker-ce-cli_19.03.4~3-0~ubuntu-bionic_amd64.deb",
-				Hash:    "09402bf5dac40f0c50f1071b17f38f6584a42ad1",
-			},
-		},
-	},
-
-	// 19.03.4 - CentOS / Rhel7
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel7, distros.DistributionCentos7, distros.DistributionAmazonLinux2},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "19.03.4",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-19.03.4-3.el7.x86_64.rpm",
-		Hash:           "02a9db54fa40b8d94e2a4c1b5572ad911873a4c8",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "19.03.4",
-				Source:  "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-cli-19.03.4-3.el7.x86_64.rpm",
-				Hash:    "1fffcc716e74a59f753f8898ba96693a00e79e26",
-			},
-		},
-	},
-
-	// 19.03.4 - CentOS / Rhel8
-	{
-		PackageVersion: "19.03.4",
-		Name:           "docker-ce",
-		Distros:        []distros.Distribution{distros.DistributionRhel8, distros.DistributionCentos8},
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Version:        "19.03.4",
-		Source:         "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-19.03.4-3.el7.x86_64.rpm",
-		Hash:           "02a9db54fa40b8d94e2a4c1b5572ad911873a4c8",
-		ExtraPackages: map[string]packageInfo{
-			"docker-ce-cli": {
-				Version: "19.03.4",
-				Source:  "https://download.docker.com/linux/centos/7/x86_64/stable/Packages/docker-ce-cli-19.03.4-3.el7.x86_64.rpm",
-				Hash:    "1fffcc716e74a59f753f8898ba96693a00e79e26",
-			},
-		},
-	},
-
-	// 19.03.8 - Linux Generic
-	{
-		PackageVersion: "19.03.8",
-		PlainBinary:    true,
-		Architectures:  []Architecture{ArchitectureAmd64},
-		Source:         "https://download.docker.com/linux/static/stable/x86_64/docker-19.03.8.tgz",
-		Hash:           "b1e783804b3436f6153bce9ed7465f4aebe0b8de",
-	},
-
-	// TIP: When adding the next version, copy the previous version, string replace the version and run:
-	//   VERIFY_HASHES=1 go test -v ./nodeup/pkg/model -run TestDockerPackageHashes
-	// (you might want to temporarily comment out older versions on a slower connection and then validate)
-}
 
 func (b *DockerBuilder) dockerVersion() (string, error) {
 	dockerVersion := ""
@@ -612,33 +56,68 @@ func (b *DockerBuilder) dockerVersion() (string, error) {
 
 // Build is responsible for configuring the docker daemon
 func (b *DockerBuilder) Build(c *fi.ModelBuilderContext) error {
+	if b.Cluster.Spec.ContainerRuntime != "docker" {
+		return nil
+	}
 	if b.skipInstall() {
 		klog.Infof("SkipInstall is set to true; won't install Docker")
 		return nil
 	}
 
-	// @check: neither coreos or containeros need provision docker.service, just the docker daemon options
+	// @check: neither flatcar nor containeros need provision docker.service, just the docker daemon options
 	switch b.Distribution {
-	case distros.DistributionCoreOS:
-		klog.Infof("Detected CoreOS; won't install Docker")
-		if err := b.buildContainerOSConfigurationDropIn(c); err != nil {
-			return err
-		}
-		return nil
-
-	case distros.DistributionFlatcar:
+	case distributions.DistributionFlatcar:
 		klog.Infof("Detected Flatcar; won't install Docker")
 		if err := b.buildContainerOSConfigurationDropIn(c); err != nil {
 			return err
 		}
 		return nil
 
-	case distros.DistributionContainerOS:
+	case distributions.DistributionContainerOS:
 		klog.Infof("Detected ContainerOS; won't install Docker")
 		if err := b.buildContainerOSConfigurationDropIn(c); err != nil {
 			return err
 		}
 		return nil
+	}
+
+	dockerVersion, err := b.dockerVersion()
+	if err != nil {
+		return err
+	}
+	sv, err := semver.ParseTolerant(dockerVersion)
+	if err != nil {
+		return fmt.Errorf("error parsing docker version %q: %v", dockerVersion, err)
+	}
+
+	c.AddTask(b.buildDockerGroup())
+	c.AddTask(b.buildSystemdSocket())
+
+	// Add binaries from assets
+	{
+		f := b.Assets.FindMatches(regexp.MustCompile(`^docker/`))
+		if len(f) == 0 {
+			return fmt.Errorf("unable to find any Docker binaries in assets")
+		}
+		for k, v := range f {
+			fileTask := &nodetasks.File{
+				Path:     filepath.Join("/usr/bin", k),
+				Contents: v,
+				Type:     nodetasks.FileType_File,
+				Mode:     fi.String("0755"),
+			}
+			c.AddTask(fileTask)
+
+			// As a mitigation for CVE-2019-5736 we chattr docker-runc to be immutable
+			// https://github.com/kubernetes/kops/blob/master/docs/advisories/cve_2019_5736.md
+			if strings.HasSuffix(k, "runc") && sv.LT(semver.MustParse("18.9.2")) {
+				c.AddTask(&nodetasks.Chattr{
+					File: filepath.Join("/usr/bin", k),
+					Mode: "+i",
+					Deps: []fi.Task{fileTask},
+				})
+			}
+		}
 	}
 
 	// Add Apache2 license
@@ -651,111 +130,14 @@ func (b *DockerBuilder) Build(c *fi.ModelBuilderContext) error {
 		c.AddTask(t)
 	}
 
-	dockerVersion, err := b.dockerVersion()
-	if err != nil {
-		return err
-	}
-
-	// Add packages
-	{
-		count := 0
-		for i := range dockerVersions {
-			dv := &dockerVersions[i]
-			if !dv.matches(b.Architecture, dockerVersion, b.Distribution) {
-				continue
-			}
-
-			count++
-
-			var packageTask fi.Task
-			if dv.PlainBinary {
-				packageTask = &nodetasks.Archive{
-					Name:      "docker-ce",
-					Source:    dv.Source,
-					Hash:      dv.Hash,
-					TargetDir: "/",
-					MapFiles: map[string]string{
-						"docker/docker*": "/usr/bin",
-					},
-				}
-				c.AddTask(packageTask)
-
-				c.AddTask(b.buildDockerGroup())
-				if b.Distribution.IsDebianFamily() {
-					c.AddTask(b.buildSystemdSocket())
-				}
-			} else {
-				var extraPkgs []*nodetasks.Package
-				for name, pkg := range dv.ExtraPackages {
-					dep := &nodetasks.Package{
-						Name:         name,
-						Version:      s(pkg.Version),
-						Source:       s(pkg.Source),
-						Hash:         s(pkg.Hash),
-						PreventStart: fi.Bool(true),
-					}
-					extraPkgs = append(extraPkgs, dep)
-				}
-				packageTask = &nodetasks.Package{
-					Name:    dv.Name,
-					Version: s(dv.Version),
-					Source:  s(dv.Source),
-					Hash:    s(dv.Hash),
-					Deps:    extraPkgs,
-
-					// TODO: PreventStart is now unused?
-					PreventStart: fi.Bool(true),
-				}
-				c.AddTask(packageTask)
-			}
-
-			// As a mitigation for CVE-2019-5736 (possibly a fix, definitely defense-in-depth) we chattr docker-runc to be immutable
-			for _, f := range dv.MarkImmutable {
-				c.AddTask(&nodetasks.Chattr{
-					File: f,
-					Mode: "+i",
-					Deps: []fi.Task{packageTask},
-				})
-			}
-
-			for _, dep := range dv.Dependencies {
-				c.AddTask(&nodetasks.Package{Name: dep})
-			}
-
-			// Note we do _not_ stop looping... centos/rhel comprises multiple packages
-		}
-
-		if count == 0 {
-			klog.Warningf("Did not find docker package for %s %s %s", b.Distribution, b.Architecture, dockerVersion)
-		}
-	}
-
-	// Split into major.minor.(patch+pr+meta)
-	parts := strings.SplitN(dockerVersion, ".", 3)
-	if len(parts) != 3 {
-		return fmt.Errorf("error parsing docker version %q, no Major.Minor.Patch elements found", dockerVersion)
-	}
-
-	// Validate major
-	dockerVersionMajor, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return fmt.Errorf("error parsing major docker version %q: %v", parts[0], err)
-	}
-
-	// Validate minor
-	dockerVersionMinor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return fmt.Errorf("error parsing minor docker version %q: %v", parts[1], err)
-	}
-
-	c.AddTask(b.buildSystemdService(dockerVersionMajor, dockerVersionMinor))
+	c.AddTask(b.buildSystemdService(sv))
 
 	if err := b.buildSysconfig(c); err != nil {
 		return err
 	}
 
 	// Enable health-check
-	if b.healthCheck() || (b.IsKubernetesLT("1.18") && b.Distribution.IsDebianFamily()) {
+	if b.healthCheck() {
 		c.AddTask(b.buildSystemdHealthCheckScript())
 		c.AddTask(b.buildSystemdHealthCheckService())
 		c.AddTask(b.buildSystemdHealthCheckTimer())
@@ -774,6 +156,8 @@ func (b *DockerBuilder) buildDockerGroup() *nodetasks.GroupTask {
 
 // buildSystemdSocket creates docker.socket, for when we're not installing from a package
 func (b *DockerBuilder) buildSystemdSocket() *nodetasks.Service {
+	// Based on https://github.com/docker/docker-ce-packaging/blob/master/systemd/docker.socket
+
 	manifest := &systemd.Manifest{}
 	manifest.Set("Unit", "Description", "Docker Socket for the API")
 	manifest.Set("Unit", "PartOf", "docker.service")
@@ -798,83 +182,62 @@ func (b *DockerBuilder) buildSystemdSocket() *nodetasks.Service {
 	return service
 }
 
-func (b *DockerBuilder) buildSystemdService(dockerVersionMajor int, dockerVersionMinor int) *nodetasks.Service {
-	oldDocker := dockerVersionMajor <= 1 && dockerVersionMinor <= 11
-	usesDockerSocket := true
-
-	var dockerdCommand string
-	if oldDocker {
-		dockerdCommand = "/usr/bin/docker daemon"
-	} else {
-		dockerdCommand = "/usr/bin/dockerd"
-	}
+func (b *DockerBuilder) buildSystemdService(dockerVersion semver.Version) *nodetasks.Service {
+	// Based on https://github.com/docker/docker-ce-packaging/blob/master/systemd/docker.service
 
 	manifest := &systemd.Manifest{}
 	manifest.Set("Unit", "Description", "Docker Application Container Engine")
 	manifest.Set("Unit", "Documentation", "https://docs.docker.com")
-
-	if b.Distribution.IsRHELFamily() && !oldDocker {
-		// See https://github.com/docker/docker/pull/24804
-		usesDockerSocket = false
-	}
-
-	if usesDockerSocket {
-		manifest.Set("Unit", "After", "network.target docker.socket")
-		manifest.Set("Unit", "Requires", "docker.socket")
+	if dockerVersion.GTE(semver.MustParse("18.9.0")) {
+		manifest.Set("Unit", "After", "network-online.target firewalld.service containerd.service")
 	} else {
-		manifest.Set("Unit", "After", "network.target")
+		manifest.Set("Unit", "After", "network-online.target firewalld.service")
 	}
+	manifest.Set("Unit", "Wants", "network-online.target")
+	manifest.Set("Unit", "Requires", "docker.socket")
 
-	manifest.Set("Service", "Type", "notify")
 	manifest.Set("Service", "EnvironmentFile", "/etc/sysconfig/docker")
 	manifest.Set("Service", "EnvironmentFile", "/etc/environment")
 
-	if usesDockerSocket {
-		manifest.Set("Service", "ExecStart", dockerdCommand+" -H fd:// \"$DOCKER_OPTS\"")
-	} else {
-		manifest.Set("Service", "ExecStart", dockerdCommand+" \"$DOCKER_OPTS\"")
+	manifest.Set("Service", "Type", "notify")
+	// Restore the default SELinux security contexts for the Docker binaries
+	if b.Distribution.IsRHELFamily() && b.Cluster.Spec.Docker != nil && fi.BoolValue(b.Cluster.Spec.Docker.SelinuxEnabled) {
+		manifest.Set("Service", "ExecStartPre", "/bin/sh -c 'restorecon -v /usr/bin/docker*'")
 	}
+	// the default is not to use systemd for cgroups because the delegate issues still
+	// exists and systemd currently does not support the cgroup feature set required
+	// for containers run by docker
+	manifest.Set("Service", "ExecStart", "/usr/bin/dockerd -H fd:// \"$DOCKER_OPTS\"")
+	manifest.Set("Service", "ExecReload", "/bin/kill -s HUP $MAINPID")
+	manifest.Set("Service", "TimeoutSec", "0")
+	manifest.Set("Service", "RestartSec", "2")
+	manifest.Set("Service", "Restart", "always")
 
-	if !oldDocker {
-		// This was added by docker 1.12
-		// TODO: They seem sensible - should we backport them?
+	// Note that StartLimit* options were moved from "Service" to "Unit" in systemd 229.
+	// Both the old, and new location are accepted by systemd 229 and up, so using the old location
+	// to make them work for either version of systemd.
+	manifest.Set("Service", "StartLimitBurst", "3")
 
-		manifest.Set("Service", "ExecReload", "/bin/kill -s HUP $MAINPID")
-		// kill only the docker process, not all processes in the cgroup
-		manifest.Set("Service", "KillMode", "process")
-
-		manifest.Set("Service", "TimeoutStartSec", "0")
-	}
-
-	if oldDocker {
-		// Only in older versions of docker (< 1.12)
-		manifest.Set("Service", "MountFlags", "slave")
-	}
+	// Note that StartLimitInterval was renamed to StartLimitIntervalSec in systemd 230.
+	// Both the old, and new name are accepted by systemd 230 and up, so using the old name to make
+	// this option work for either version of systemd.
+	manifest.Set("Service", "StartLimitInterval", "60s")
 
 	// Having non-zero Limit*s causes performance problems due to accounting overhead
 	// in the kernel. We recommend using cgroups to do container-local accounting.
-	// TODO: Should we set this? https://github.com/kubernetes/kubernetes/issues/39682
-	//service.Set("Service", "LimitNOFILE", "infinity")
-	//service.Set("Service", "LimitNPROC", "infinity")
-	//service.Set("Service", "LimitCORE", "infinity")
-	manifest.Set("Service", "LimitNOFILE", "1048576")
-	manifest.Set("Service", "LimitNPROC", "1048576")
+	manifest.Set("Service", "LimitNOFILE", "infinity")
+	manifest.Set("Service", "LimitNPROC", "infinity")
 	manifest.Set("Service", "LimitCORE", "infinity")
 
-	//# Uncomment TasksMax if your systemd version supports it.
-	//# Only systemd 226 and above support this version.
-	//#TasksMax=infinity
-	if b.IsKubernetesGTE("1.10") {
-		// Equivalent of https://github.com/kubernetes/kubernetes/pull/51986
-		manifest.Set("Service", "TasksMax", "infinity")
-	}
-
-	manifest.Set("Service", "Restart", "always")
-	manifest.Set("Service", "RestartSec", "2s")
-	manifest.Set("Service", "StartLimitInterval", "0")
+	// Only systemd 226 and above support this option.
+	manifest.Set("Service", "TasksMax", "infinity")
 
 	// set delegate yes so that systemd does not reset the cgroups of docker containers
 	manifest.Set("Service", "Delegate", "yes")
+
+	// kill only the docker process, not all processes in the cgroup
+	manifest.Set("Service", "KillMode", "process")
+	manifest.Set("Service", "OOMScoreAdjust", "-500")
 
 	manifest.Set("Install", "WantedBy", "multi-user.target")
 
@@ -953,10 +316,8 @@ func (b *DockerBuilder) buildContainerOSConfigurationDropIn(c *fi.ModelBuilderCo
 		"EnvironmentFile=/etc/environment",
 	}
 
-	if b.IsKubernetesGTE("1.10") {
-		// Equivalent of https://github.com/kubernetes/kubernetes/pull/51986
-		lines = append(lines, "TasksMax=infinity")
-	}
+	// Equivalent of https://github.com/kubernetes/kubernetes/pull/51986
+	lines = append(lines, "TasksMax=infinity")
 
 	contents := strings.Join(lines, "\n")
 
@@ -991,9 +352,9 @@ func (b *DockerBuilder) buildSysconfig(c *fi.ModelBuilderContext) error {
 	}
 
 	// ContainerOS now sets the storage flag in /etc/docker/daemon.json, and it is an error to set it twice
-	if b.Distribution == distros.DistributionContainerOS {
+	if b.Distribution == distributions.DistributionContainerOS {
 		// So that we can support older COS images though, we do check for /etc/docker/daemon.json
-		if b, err := ioutil.ReadFile("/etc/docker/daemon.json"); err != nil {
+		if b, err := os.ReadFile("/etc/docker/daemon.json"); err != nil {
 			if os.IsNotExist(err) {
 				klog.V(2).Infof("/etc/docker/daemon.json not found")
 			} else {

@@ -27,17 +27,18 @@ spec:
     - instanceGroup: master-us-test-1a
       name: us-test-1a
     name: events
+  iam: {}
   kubeAPIServer:
     serviceNodePortRange: 28000-32767
     auditWebhookBatchThrottleQps: 3.14
   kubelet:
     anonymousAuth: false
-  kubernetesVersion: v1.14.0
+  kubernetesVersion: v1.21.0
   masterInternalName: api.internal.externalpolicies.example.com
   masterPublicName: api.externalpolicies.example.com
   networkCIDR: 172.20.0.0/16
   networking:
-    kubenet: {}
+    cni: {}
   nodePortAccess:
   - 1.2.3.4/32
   - 10.20.30.0/24
@@ -49,11 +50,11 @@ spec:
     nodes: public
   externalPolicies:
     node:
-      - aws:arn:iam:123456789000:policy:test-policy
+      - arn:aws-test:iam::123456789000:policy/test-policy
     master:
-      - aws:arn:iam:123456789000:policy:test-policy
+      - arn:aws-test:iam::123456789000:policy/test-policy
     bastion:
-      - aws:arn:iam:123456789000:policy:test-policy
+      - arn:aws-test:iam::123456789000:policy/test-policy
   subnets:
   - cidr: 172.20.32.0/19
     name: us-test-1a
